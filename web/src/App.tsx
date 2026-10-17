@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
 import { pad3 } from './drones';
 import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
@@ -8,6 +8,8 @@ import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './ty
 
 const TABS = ['Layers', 'Alerts', 'Explain', 'Survey', 'Metrics'] as const;
 type Tab = (typeof TABS)[number];
+// The 3D map pulls in MapLibre + deck.gl; load it on demand so the 2D view stays light.
+const OpsMap = lazy(() => import('./ops/OpsMap'));
 
 export default function App() {
   const [list, setList] = useState<ScenarioListItem[]>([]);
@@ -24,6 +26,7 @@ export default function App() {
   const [moveSensor, setMoveSensor] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState<Source>(dataSource());
+  const [view, setView] = useState<'ops' | 'classic'>('ops');
 
   useEffect(() => {
     listScenarios().then(setList).catch((e) => setErr(String(e)));
@@ -94,6 +97,10 @@ export default function App() {
         <span className={`src ${source === 'api' ? 'live' : ''}`} title={apiUrl || 'fixtures/scenario_demo.json'}>
           {source === 'api' ? 'Live API' : source === 'fallback' ? 'API unreachable · fixture' : 'Fixture'}
         </span>
+        <div className="view-switch" role="group" aria-label="Map view">
+          <button className={view === 'ops' ? 'on' : ''} aria-pressed={view === 'ops'} onClick={() => setView('ops')}>3D ops</button>
+          <button className={view === 'classic' ? 'on' : ''} aria-pressed={view === 'classic'} onClick={() => setView('classic')}>2D classic</button>
+        </div>
         {busy && <span className="busy">{busy}</span>}
         {err && <span className="error inline" title={err}>{err}</span>}
         <span className="spacer" />
@@ -110,7 +117,11 @@ export default function App() {
 
       <main>
         <section className={`maps ${alt ? 'split' : ''}`}>
-          {scenario ? (
+          {scenario && view === 'ops' && !alt ? (
+            <Suspense fallback={<div className="loading">Loading 3D terrain…</div>}>
+              <OpsMap scenario={scenario} t={t} playing={playing} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack} reconRoute={reconRoute} />
+            </Suspense>
+          ) : scenario ? (
             <>
               <MapView scenario={scenario} t={t} playing={playing} layers={layers} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack}
                 reconRoute={reconRoute} label={alt ? 'Baseline' : undefined}
@@ -151,7 +162,7 @@ export default function App() {
         </aside>
       </main>
 
-      <Timeline t={t} max={maxT} playing={playing} onT={(x) => setT(x)} onPlay={onPlay} marks={alertMarks} />
+      <Timeline t={t} max={maxT} playing={playing} onT={(x) => setT(x)} onPlay={onPlay} marks={alertMarks} events={scenario?.frames.flatMap((f) => f.alerts.map((a) => ({ t: f.t, kind: a.kind })))} />
     </div>
   );
 }

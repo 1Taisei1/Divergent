@@ -63,7 +63,7 @@ header { display: flex; align-items: stretch; gap: 16px; padding: 8px 16px; back
 .telemetry .hot dd { color: var(--hazard); }
 
 main { display: grid; grid-template-columns: minmax(0, 70fr) minmax(320px, 30fr); min-height: 0; }
-.maps { display: grid; grid-template-columns: 1fr; min-height: 0; position: relative; }
+.maps { display: grid; grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); min-height: 0; position: relative; }
 .maps.split { grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-2); }
 .alt { position: relative; min-height: 0; }
 .close-alt { position: absolute; z-index: 1000; bottom: 40px; right: 12px; background: var(--panel); border: 1px solid var(--line-2); padding: 6px 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -225,7 +225,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 .t-readout { font-variant-numeric: tabular-nums; font-size: 24px; font-weight: 800; min-width: 190px; text-align: right; letter-spacing: 0.02em; }
 .t-readout small { color: var(--muted); font-size: 14px; font-weight: 700; }
 
-@media (max-width: 1599px) {
+@media (max-width: 1919px) {
   .sim-pill { display: none; } /* the map's SIM badge carries it */
 }
 
@@ -238,6 +238,95 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 
 @media (prefers-reduced-motion: reduce) {
   .src.live::before, .suggest-plus { animation: none; }
+}
+
+/* View switch (header) */
+.view-switch { display: flex; align-self: center; border: 1px solid var(--line-2); }
+.view-switch button { background: none; border: 0; padding: 6px 10px; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.view-switch button + button { border-left: 1px solid var(--line-2); }
+.view-switch button:hover { color: var(--text); }
+.view-switch button.on { background: var(--text); color: var(--bg); }
+
+/* 3D ops map (MapLibre terrain + deck.gl) */
+.ops { position: relative; height: 100%; min-height: 0; overflow: hidden; background: var(--map); }
+.ops > .ops-map { position: absolute; inset: 0; } /* beats maplibregl-map's position: relative */
+.ops .maplibregl-canvas { outline: none; }
+.ops .sim-badge { top: 16px; right: 16px; }
+.ops .maplibregl-ctrl-top-right { top: 48px; }
+.ops .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line-2); border-radius: 0; box-shadow: none; }
+.ops .maplibregl-ctrl-group button { width: 34px; height: 34px; border-radius: 0; }
+.ops .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line); }
+.ops .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.92); }
+.ops .maplibregl-ctrl-group button:hover { background: var(--panel-3); }
+.ops .maplibregl-ctrl-scale { background: oklch(0.13 0.005 60 / 0.85); color: var(--muted); border: 2px solid var(--line-2); border-top: 0; font: 700 12px/1.4 var(--mono); }
+.ops .maplibregl-ctrl-attrib { background: oklch(0.13 0.005 60 / 0.8); color: var(--muted); font: 500 11px/1.4 var(--mono); }
+.ops .maplibregl-ctrl-attrib a { color: var(--muted); }
+.ops .maplibregl-ctrl-attrib-button { filter: invert(0.85); }
+.ops-tip { font: 500 14px/1.35 var(--mono) !important; background: var(--panel) !important; color: var(--text) !important; border: 1px solid var(--line-2); padding: 4px 8px !important; }
+
+.ops-modes { position: absolute; top: 16px; left: 16px; z-index: 5; display: flex; border: 1px solid var(--line-2); background: var(--panel); max-width: calc(100% - 260px); overflow-x: auto; scrollbar-width: none; }
+.ops-modes button { background: none; border: 0; padding: 8px 14px; font-size: 14px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; transition: color 150ms var(--ease); }
+.ops-modes button + button { border-left: 1px solid var(--line); }
+.ops-modes button:hover { color: var(--text); }
+.ops-modes button.on { color: var(--text); border-bottom-color: var(--hazard); background: var(--panel-3); }
+
+.ops-card { position: absolute; z-index: 5; top: 64px; left: 16px; width: 300px; max-height: calc(100% - 190px); overflow-y: auto; background: oklch(0.185 0.006 60 / 0.94); border: 1px solid var(--line-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.ops-card-head { display: flex; justify-content: space-between; align-items: center; }
+.ops-collapse { align-self: flex-end; background: none; border: 1px solid var(--line); color: var(--muted); padding: 3px 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.ops-collapse:hover { color: var(--text); border-color: var(--text); }
+.ops-card.is-collapsed { width: auto; padding: 6px; background: var(--panel); }
+.ops-card.is-collapsed .ops-collapse { align-self: auto; color: var(--text); }
+.ops-x { background: none; border: 1px solid var(--line); color: var(--muted); width: 28px; height: 28px; }
+.ops-x:hover { color: var(--text); border-color: var(--text); }
+.ops-title { margin: 0; font: 800 30px/1 var(--mono); display: flex; align-items: baseline; gap: 10px; }
+.ops-title small { font-size: 13px; letter-spacing: 0.1em; color: var(--muted); }
+.ops-title.hostile { color: var(--hazard); }
+.ops-data { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 0; background: var(--line); border: 1px solid var(--line); }
+.ops-data > div { background: var(--panel-2); padding: 6px 8px; }
+.ops-data dt { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ops-data dd { margin: 0; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ops-note { margin: 0; font-size: 13px; color: var(--muted); max-width: 40ch; }
+.ops-row { display: flex; gap: 8px; }
+.ops-row button { flex: 1; }
+.ops-row button.on { color: var(--text); border-color: var(--text); }
+.ops-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.ops-list:empty { display: none; }
+.ops-list button { width: 100%; display: flex; justify-content: space-between; gap: 10px; background: var(--panel-2); border: 0; padding: 7px 10px; text-align: left; font-size: 14px; }
+.ops-list button:hover { background: var(--panel-3); }
+.ops-list button.on { background: var(--text); color: var(--bg); }
+.ops-list button span { color: var(--muted); font-size: 13px; }
+.ops-list button.on span { color: var(--bg); }
+.ops-list b.hostile { color: var(--hazard); } .ops-list b.lost { color: var(--faint); } .ops-list b.safe { color: var(--ok); }
+
+.ops-legend { position: absolute; z-index: 5; left: 16px; bottom: 44px; background: oklch(0.13 0.005 60 / 0.88); border: 1px solid var(--line-2); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.ops-ramp { display: flex; align-items: center; gap: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ops-ramp span { padding: 0 8px; }
+.ops-ramp i { width: 26px; height: 12px; display: block; }
+.ops-readout { z-index: 5; }
+
+.ops-camera { position: absolute; z-index: 5; right: 16px; top: 168px; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line-2); width: 76px; }
+.ops-camera button { background: var(--panel); border: 0; height: 34px; font-weight: 800; font-size: 14px; color: var(--muted); }
+.ops-camera button:hover { color: var(--text); background: var(--panel-3); }
+.ops-camera button.on { background: var(--text); color: var(--bg); }
+.ops-cam-readout { grid-column: 1 / -1; background: var(--panel); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-align: center; color: var(--muted); padding: 4px 0; }
+
+@media (max-width: 900px) {
+  header { gap: 8px; padding: 6px 10px; }
+  .brand { border-right: 0; padding-right: 0; }
+  .brand-sub, .scenario .micro { display: none; }
+  .brand-mark { font-size: 24px; }
+  .scenario select { max-width: 190px; }
+  .telemetry > div { min-width: 52px; padding: 2px 6px; }
+  .telemetry dt { font-size: 11px; }
+  .telemetry dd { font-size: 18px; }
+}
+@media (max-width: 700px) {
+  .ops-modes { left: 8px; right: 8px; max-width: none; top: 8px; }
+  .ops .sim-badge { top: 52px; right: 8px; }
+  .ops-card { top: auto; bottom: 40px; left: 8px; right: 8px; width: auto; max-height: 36%; }
+  .ops-legend { display: none; }
+  .ops-camera { top: 96px; right: 8px; }
+  .ops .maplibregl-ctrl-top-right { display: none; }
 }
 
 /* Our safest launch sites (Neil) and recon-confirmed enemy sites, in the HUD vocabulary */

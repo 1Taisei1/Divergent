@@ -10,7 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@deck.gl/core": "9.1.15",
+    "@deck.gl/layers": "9.1.15",
+    "@deck.gl/mapbox": "9.1.15",
     "leaflet": "^1.9.4",
+    "maplibre-gl": "4.7.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-leaflet": "^5.0.0"

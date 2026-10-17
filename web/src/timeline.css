@@ -1,0 +1,93 @@
+/* Event timeline (bottom bar): per-second alert histogram that doubles as the scrubber, plus Zulu clock and sim time.
+   Replaces the old .timeline / .slider-wrap / .marks rules in index.css, which nothing renders any more.
+   No animation anywhere in here, so there is nothing to gate on prefers-reduced-motion. */
+
+.tl {
+  --tl-plot: 40px;   /* histogram height */
+  --tl-axis: 22px;   /* tick row under it */
+  --tl-seg-max: 16px;
+  position: relative;
+  z-index: 1100;     /* the hover readout opens upward over the map (Leaflet panes go up to 1000) */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "ctl track clock";
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+/* Alert group colours, shared by bars, legend swatches and the hover readout */
+.g-risk { --g: var(--hazard); }
+.g-origin { --g: var(--origin); }
+.g-site { --g: var(--text); }
+.g-track { --g: var(--muted); }
+
+/* Play / speed */
+.tl-ctl { grid-area: ctl; display: flex; align-items: center; gap: 10px; }
+.tl-play { width: 52px; height: 44px; background: var(--text); border: 0; color: var(--bg); font-weight: 800; font-size: 16px; }
+.tl-play:hover { background: var(--phosphor); }
+.tl-speed { color: var(--muted); font-size: 14px; font-weight: 700; }
+
+/* Track: legend row over the histogram + scrubber */
+.tl-track { grid-area: track; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.tl-legend { display: flex; align-items: center; gap: 14px; line-height: 1; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.tl-key { display: inline-flex; align-items: center; gap: 6px; }
+.tl-key::before { content: ''; flex: none; width: 9px; height: 9px; background: var(--g); }
+.tl-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+.tl-scrub { position: relative; cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+
+/* Histogram: one column per simulated second, one block per alert, stacked by group */
+.tl-plot { position: relative; height: var(--tl-plot); background: var(--bg); }
+.tl-plot::after { content: ''; position: absolute; inset: 0; border: 1px solid var(--line); pointer-events: none; }
+.tl-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: 0.55; }
+.tl-bars { position: absolute; inset: 0; display: grid; }
+.tl-col { display: flex; flex-direction: column-reverse; align-items: center; gap: 1px; min-width: 0; padding: 0 0.5px 1px; }
+.tl-col.empty::before { content: ''; width: 100%; max-width: 7px; height: 2px; background: var(--line); }
+.tl-seg { display: block; width: 100%; max-width: 7px; background: var(--g); flex: 0 0 min(var(--tl-seg-max), calc((var(--tl-plot) - 8px - var(--m) * 1px) / var(--m))); }
+
+/* Seconds after the current one are dimmed; the cursor is the current second */
+.tl-future { position: absolute; top: 0; right: 0; height: var(--tl-plot); background: color-mix(in oklab, var(--panel) 68%, transparent); pointer-events: none; }
+.tl-cursor { position: absolute; top: -5px; bottom: calc(var(--tl-axis) - 6px); width: 2px; margin-left: -1px; background: var(--text); pointer-events: none; }
+.tl-cursor::before { content: ''; position: absolute; top: 0; left: 50%; width: 10px; height: 5px; margin-left: -5px; background: var(--text); }
+.tl-ghost { position: absolute; top: 0; height: var(--tl-plot); width: 1px; background: var(--muted); opacity: 0.7; pointer-events: none; }
+
+/* Time ruler */
+.tl-axis { position: relative; height: var(--tl-axis); }
+.tl-tick { position: absolute; top: 0; width: 0; height: 100%; }
+.tl-tick::before { content: ''; position: absolute; top: 0; left: 0; width: 1px; height: 5px; background: var(--line-2); }
+.tl-tick em { position: absolute; top: 6px; left: 0; transform: translateX(-50%); font: 700 13px/1 var(--mono); font-style: normal; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; color: var(--muted); }
+.tl-tick.first em { transform: none; }
+.tl-tick.last em { transform: translateX(-100%); }
+
+/* Hover / drag readout for one second */
+.tl-tip { position: absolute; bottom: calc(100% + 10px); z-index: 3; transform: translateX(-50%); display: grid; gap: 4px; padding: 6px 10px 7px; background: var(--panel-3); border: 1px solid var(--line-2); font-size: 13px; font-weight: 700; line-height: 1.2; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
+.tl-tip.l { transform: none; }
+.tl-tip.r { transform: translateX(-100%); }
+.tl-tip strong { color: var(--text); font-weight: 800; }
+.tl-tip .tl-key { color: var(--text); }
+.tl-tip .none { color: var(--muted); }
+
+/* Native range input: keeps keyboard + screen-reader access; the histogram above is its visible face */
+.tl-range { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; pointer-events: none; }
+.tl-ring { position: absolute; inset: -4px; pointer-events: none; }
+.tl-range:focus-visible ~ .tl-ring { outline: 2px solid var(--text); }
+
+/* Clock block */
+.tl-clock { grid-area: clock; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 164px; padding-left: 16px; border-left: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tl-zulu { font-size: 20px; font-weight: 700; line-height: 1.1; letter-spacing: 0.04em; }
+.tl-zulu span { margin-left: 1px; color: var(--muted); }
+.tl-t { font-size: 24px; font-weight: 800; line-height: 1.1; letter-spacing: 0.02em; }
+.tl-t small { color: var(--muted); font-size: 14px; font-weight: 700; }
+
+@media (max-width: 760px) {
+  .tl { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "ctl clock" "track track"; gap: 8px 12px; }
+  .tl-play { width: 44px; height: 40px; }
+  .tl-clock { flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 12px; min-width: 0; padding-left: 0; border-left: 0; }
+  .tl-zulu { font-size: 16px; }
+  .tl-t { font-size: 20px; }
+  .tl-count { display: none; }
+  .tl-tick.alt em { display: none; } /* every other label, so three-digit ticks never touch */
+}
