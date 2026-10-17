@@ -20,8 +20,9 @@ CACHE = {}
 
 @app.on_event("startup")
 def _warm():
+    ov = json.loads(os.environ.get("SCENARIO_OVERRIDES") or "null")  # set on a what-if clone VM
     for sid in PRESETS:
-        CACHE[sid] = build_scenario(sid)
+        CACHE[sid] = build_scenario(sid, overrides=ov)
 
 
 def _get(sid):
