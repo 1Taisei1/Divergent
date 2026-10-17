@@ -106,10 +106,21 @@ def run(raw, origins_by_t):
         for team in teams_by_t[t]:
             if team["id"] not in order:
                 order.append(team["id"])
-    final = {team["id"] for team in teams_by_t.get(raw["duration_s"], [])}
+    last = teams_by_t.get(raw["duration_s"], [])
+    final = {team["id"] for team in last}
     ranked = [i for i in order if i in final] + [i for i in order if i not in final]
     rename = {old: f"LT{n + 1}" for n, old in enumerate(ranked)}
+    # A dropped provisional team takes the name of the team its first drone ends up in, so the picture doesn't show
+    # e.g. "LT4" before it settles into LT2; if that team is already on screen it reads "LT2?" (pending match).
+    home = {tid: rename[team["id"]] for team in last for tid in team["track_ids"]}
     for t in teams_by_t:
+        shown = {rename[team["id"]] for team in teams_by_t[t] if team["id"] in final}
         for team in teams_by_t[t]:
-            team["id"] = rename[team["id"]]
+            name = rename[team["id"]]
+            if team["id"] not in final and team["track_ids"]:
+                heir = home.get(team["track_ids"][0])
+                if heir:
+                    name = heir if heir not in shown else f"{heir}?"
+                    shown.add(name)
+            team["id"] = name
     return teams_by_t
