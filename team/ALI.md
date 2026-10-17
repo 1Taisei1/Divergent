@@ -39,7 +39,7 @@ Signatures are in CONTRACT.md → "Python module interfaces". Use your own fake 
     never contributed to a track (should be 100 with the current tracker; still compute it).
   - `label`: "Measured on simulated data".
 
-- [ ] **5b. Pull before you touch `planning/recon.py` (added by Diego).** The old `propose` returned a home-only route and 15 m/s
+- [x] **5b. Pull before you touch `planning/recon.py` (added by Diego).** The old `propose` returned a home-only route and 15 m/s
   could not reach the launch sites, so `recon.py` was rewritten: Dijkstra planner to the reachable spot with the most visible heat,
   `SPEED_MPS` 100, 20 s loiter, 1,500 m view, and a new `sightings()`. Tests updated and passing. `git pull` first, do not revert
   it, and ask Diego before changing its behavior. Then carry on with your remaining tasks.
