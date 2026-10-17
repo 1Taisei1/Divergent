@@ -2,12 +2,15 @@ import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, t
 import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
 import { pad3 } from './drones';
 import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
-import { alertKey, AlertsTab, alertsUpTo, ExplainTab, LayersTab, MetricsTab, SurveyTab } from './panels';
+import { alertKey, AlertsTab, alertsUpTo, LayersTab, MetricsTab, SurveyTab } from './panels';
 import Timeline from './Timeline';
 import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './types';
 
-const TABS = ['Layers', 'Alerts', 'Explain', 'Survey', 'Metrics'] as const;
+const TABS = ['Layers', 'Alerts', 'Survey', 'Metrics'] as const;
 type Tab = (typeof TABS)[number];
+// The 3D view has its own analysis tabs and autonomous survey on the map, and layer toggles only drive the 2D map,
+// so its sidebar keeps just the alerts feed (with Explain) and the scoreboard.
+const TABS_FOR = { ops: ['Alerts', 'Metrics'], classic: ['Layers', 'Alerts', 'Survey', 'Metrics'] } as const satisfies Record<string, readonly Tab[]>;
 // The 3D map pulls in MapLibre + deck.gl; load it on demand so the 2D view stays light (preloaded right away below).
 const loadOps = () => import('./ops/OpsMap');
 const OpsMap = lazy(loadOps);
@@ -36,7 +39,7 @@ export default function App() {
   const [err, setErr] = useState('');
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [tab, setTab] = useState<Tab>(hasWebGL2 ? 'Alerts' : 'Layers'); // Layers toggles only drive the 2D map
+  const [tab, setTab] = useState<Tab>('Alerts');
   const [layers, setLayers] = useState<Layers>(ALL_LAYERS);
   const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
   const [proposed, setProposed] = useState<{ route: ReconRoute; t: number } | null>(null);
@@ -111,6 +114,7 @@ export default function App() {
   const alertMarks = useMemo(() => scenario?.frames.filter((f) => f.alerts.length).map((f) => f.t) ?? [], [scenario]);
   const alertEvents = useMemo(() => scenario?.frames.flatMap((f) => f.alerts.map((a) => ({ t: f.t, kind: a.kind }))), [scenario]);
   const shownView = alt ? 'classic' : view; // a what-if always opens in the 2D split
+  const shownTab: Tab = (TABS_FOR[shownView] as readonly Tab[]).includes(tab) ? tab : 'Alerts';
   const alertCount = scenario ? alertsUpTo(scenario, t).filter((a) => !acked.has(alertKey(a))).length : 0; // open (unacknowledged)
   const reconRoute = scenario?.recon_route && scenario.recon_route.status !== 'proposed' ? scenario.recon_route : proposed?.route ?? null;
   const frame = scenario ? frameAt(scenario, t) : undefined;
@@ -180,19 +184,15 @@ export default function App() {
 
         <aside>
           <nav>
-            {TABS.map((x) => (
-              <button key={x} className={tab === x ? 'on' : ''} onClick={() => setTab(x)}>
+            {TABS_FOR[shownView].map((x) => (
+              <button key={x} className={shownTab === x ? 'on' : ''} onClick={() => setTab(x)}>
                 {x}{x === 'Alerts' && alertCount > 0 && <span className="count">{alertCount}</span>}
               </button>
             ))}
           </nav>
-          {scenario && tab === 'Layers' && shownView === 'ops' && (
-            <div className="panel"><p className="hint">Layer toggles drive the 2D classic map. In the 3D view, each map tab shows one analysis layer; switch to 2D classic to toggle layers individually.</p></div>
-          )}
-          {scenario && tab === 'Layers' && shownView === 'classic' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
-          {scenario && tab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} acked={acked} onAck={ack} />}
-          {scenario && tab === 'Explain' && <ExplainTab scenario={scenario} t={t} />}
-          {scenario && tab === 'Survey' && (
+          {scenario && shownTab === 'Layers' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
+          {scenario && shownTab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} acked={acked} onAck={ack} />}
+          {scenario && shownTab === 'Survey' && (
             <SurveyTab scenario={scenario} t={t} proposed={proposed?.route ?? null} proposedAt={proposed?.t ?? t}
               setProposed={(r, at) => setProposed(r ? { route: r, t: at } : null)}
               onScenario={(s, from) => {
@@ -200,7 +200,7 @@ export default function App() {
                 if (from !== null) { setProposed(null); setT(from); setPlaying(true); }
               }} />
           )}
-          {scenario && tab === 'Metrics' && <MetricsTab scenario={scenario} t={t} />}
+          {scenario && shownTab === 'Metrics' && <MetricsTab scenario={scenario} t={t} />}
         </aside>
       </main>
 

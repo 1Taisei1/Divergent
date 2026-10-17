@@ -7,11 +7,37 @@ import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
 import type { Alert, AlertKind, ReconRoute, Scenario } from './types';
 
+// One click per question instead of 17 checkboxes; the full list stays one click away.
+const PRESETS: { id: string; label: string; hint: string; keys: LayerKey[] | 'all' }[] = [
+  { id: 'enemy', label: 'Enemy picture', hint: 'Where hostile drones came from and will launch next',
+    keys: ['sensors', 'detections', 'tracks', 'origins', 'backtrack', 'originHeat', 'forecast', 'launchTeams', 'recon'] },
+  { id: 'ours', label: 'Our side', hint: 'Our routes, exposure, safe launch sites, sensor gaps',
+    keys: ['sensors', 'exposure', 'routes', 'suggestion', 'launchSites', 'recon'] },
+  { id: 'all', label: 'Everything', hint: 'Every layer except the concealment wash', keys: 'all' },
+];
+const presetLayers = (keys: LayerKey[] | 'all'): Layers =>
+  Object.fromEntries((Object.keys(LAYERS) as LayerKey[]).map((k) => [k, keys === 'all' ? k !== 'launchHeat' : keys.includes(k)])) as Layers;
+const samePreset = (a: Layers, b: Layers) => (Object.keys(LAYERS) as LayerKey[]).every((k) => a[k] === b[k]);
+
 export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario; layers: Layers; setLayers: (l: Layers) => void }) {
   const sites = scenario.launch_site_options ?? [];
+  const [all, setAll] = useState(false);
   return (
     <div className="panel">
-      {(Object.keys(LAYERS) as LayerKey[]).map((k) => (
+      <div className="presets" role="group" aria-label="What to show">
+        {PRESETS.map((pr) => {
+          const on = samePreset(layers, presetLayers(pr.keys));
+          return (
+            <button key={pr.id} className={`preset${on ? ' on' : ''}`} aria-pressed={on} title={pr.hint} onClick={() => setLayers(presetLayers(pr.keys))}>
+              {pr.label}
+            </button>
+          );
+        })}
+      </div>
+      <button className="ghost small expander" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+        {all ? 'Hide individual layers' : 'All layers…'}
+      </button>
+      {all && (Object.keys(LAYERS) as LayerKey[]).map((k) => (
         <label key={k} className="toggle">
           <input type="checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} />
           <span>{LAYERS[k]}</span>
@@ -28,7 +54,7 @@ export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario;
         <div role="listitem"><i className="lg-fill forecast" /> Next-launch forecast</div>
         <div role="listitem"><i className="lg-box safe" /> Our safe launch area</div>
       </div>
-      {sites.length > 0 && (
+      {sites.length > 0 && layers.launchSites && (
         <div className="sites">
           <div className="alert-meta">Our safest launch sites (hardest for enemy sensors to trace back)</div>
           {sites.map((o, i) => (
@@ -59,9 +85,12 @@ export const alertKey = (a: Alert) => `${a.t}|${a.kind}|${a.ref_id}|${a.message}
 
 type AlertsProps = { scenario: Scenario; t: number; onJump: (t: number) => void; acked: Set<string>; onAck: (key: string) => void };
 
+const SHOW_OPEN = 5;
+
 export function AlertsTab({ scenario, t, onJump, acked, onAck }: AlertsProps) {
+  const [more, setMore] = useState(false);
   const alerts = alertsUpTo(scenario, t);
-  if (!alerts.length) return <div className="panel empty">No alerts yet at t = {t} s.</div>;
+  if (!alerts.length) return <div className="panel"><Explain scenario={scenario} t={t} /><p className="hint">No alerts yet at T+{pad3(t)}.</p></div>;
   // Open alerts: highest precedence first, newest first within a precedence. Acknowledged ones drop to the bottom.
   const open = alerts.filter((a) => !acked.has(alertKey(a))).sort((a, b) => PRECEDENCE[b.kind] - PRECEDENCE[a.kind] || b.t - a.t);
   const done = alerts.filter((a) => acked.has(alertKey(a)));
@@ -84,19 +113,26 @@ export function AlertsTab({ scenario, t, onJump, acked, onAck }: AlertsProps) {
   };
   return (
     <div className="panel">
+      <Explain scenario={scenario} t={t} />
       <div className={`queue-head${immediate ? ' hot' : ''}`}>
         <b>{open.length}</b> open{immediate ? <> · <b>{immediate}</b> immediate</> : null}
         {open.length > 1 && <button className="ghost small" onClick={() => open.forEach((a) => onAck(alertKey(a)))}>Ack all</button>}
       </div>
-      {open.map((a) => row(a, false))}
+      {(more ? open : open.slice(0, SHOW_OPEN)).map((a) => row(a, false))}
       {!open.length && <p className="hint">All alerts acknowledged.</p>}
-      {done.length > 0 && <div className="alert-meta acked-head">Acknowledged ({done.length})</div>}
-      {done.map((a) => row(a, true))}
+      {(open.length > SHOW_OPEN || done.length > 0) && (
+        <button className="ghost small expander" aria-expanded={more} onClick={() => setMore((v) => !v)}>
+          {more ? 'Show fewer' : `Show ${Math.max(0, open.length - SHOW_OPEN) ? `${open.length - SHOW_OPEN} more` : ''}${open.length > SHOW_OPEN && done.length ? ' + ' : ''}${done.length ? `${done.length} acknowledged` : ''}`}
+        </button>
+      )}
+      {more && done.length > 0 && <div className="alert-meta acked-head">Acknowledged ({done.length})</div>}
+      {more && done.map((a) => row(a, true))}
     </div>
   );
 }
 
-export function ExplainTab({ scenario, t }: { scenario: Scenario; t: number }) {
+// Plain-language summary of the current moment; sits at the top of the Alerts tab.
+function Explain({ scenario, t }: { scenario: Scenario; t: number }) {
   const [text, setText] = useState<{ t: number; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -106,16 +142,17 @@ export function ExplainTab({ scenario, t }: { scenario: Scenario; t: number }) {
     setBusy(false);
   };
   return (
-    <div className="panel">
-      <button className="primary" onClick={go} disabled={busy}>{busy ? 'Explaining…' : `Explain the picture at t = ${t} s`}</button>
+    <div className="explain-box">
+      <button className="primary" onClick={go} disabled={busy} title="AI summary for an operator. It recommends; a human decides.">
+        {busy ? 'Explaining…' : `Explain this moment (T+${pad3(t)})`}
+      </button>
       {err && <div className="error">{err}</div>}
       {text && (
         <div className="explain">
-          <div className="alert-meta">At t = {text.t} s</div>
+          <div className="alert-meta">At T+{pad3(text.t)} · recommendation only</div>
           {text.text.split('\n').filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}
         </div>
       )}
-      <p className="hint">AI summary for an operator. It recommends; a human decides.</p>
     </div>
   );
 }

@@ -364,3 +364,10 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 
 .backtrack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
 .map .backtrack-label { color: #ffd3b0 !important; border-color: #ff8a3d !important; }
+
+/* Simplified sidebar: layer presets, expanders, Explain at the top of Alerts */
+.presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.preset { background: var(--panel-2); border: 1px solid var(--line); padding: 10px 6px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; font-size: 14px; color: var(--muted); }
+.preset.on { color: var(--text); border-color: var(--text); }
+.expander { align-self: flex-start; }
+.explain-box { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
