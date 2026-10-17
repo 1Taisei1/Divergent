@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
-import MapView, { ALL_LAYERS, type Layers } from './MapView';
+import { pad3 } from './drones';
+import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
 import { AlertsTab, alertsUpTo, ExplainTab, LayersTab, MetricsTab, SurveyTab } from './panels';
 import Timeline from './Timeline';
 import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './types';
@@ -76,33 +77,47 @@ export default function App() {
   const alertMarks = useMemo(() => scenario?.frames.filter((f) => f.alerts.length).map((f) => f.t) ?? [], [scenario]);
   const alertCount = scenario ? alertsUpTo(scenario, t).length : 0;
   const reconRoute = scenario?.recon_route && scenario.recon_route.status !== 'proposed' ? scenario.recon_route : proposed?.route ?? null;
+  const frame = scenario ? frameAt(scenario, t) : undefined;
+  const live = frame?.tracks.filter((x) => x.status === 'active').length ?? 0;
+  const teams = frame?.launch_teams.length ?? 0;
 
   return (
     <div className="app">
       <header>
-        <h1>Drone origin picture</h1>
-        <select value={sid} onChange={(e) => setSid(e.target.value)} aria-label="Scenario">
-          {(list.length ? list : [{ id: sid, name: sid }]).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-        </select>
+        <h1 className="brand"><span className="brand-mark">Divergent</span><span className="brand-sub">Drone origin picture</span></h1>
+        <label className="scenario">
+          <span className="micro">Scenario</span>
+          <select value={sid} onChange={(e) => setSid(e.target.value)}>
+            {(list.length ? list : [{ id: sid, name: sid }]).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+        </label>
         <span className={`src ${source === 'api' ? 'live' : ''}`} title={apiUrl || 'fixtures/scenario_demo.json'}>
           {source === 'api' ? 'Live API' : source === 'fallback' ? 'API unreachable · fixture' : 'Fixture'}
         </span>
         {busy && <span className="busy">{busy}</span>}
         {err && <span className="error inline" title={err}>{err}</span>}
         <span className="spacer" />
-        <span className="sim-pill">All data simulated · decision support only</span>
+        {scenario && (
+          <dl className="telemetry" aria-label="Picture at the current time">
+            <div><dt>T+</dt><dd>{pad3(t)}<small>s</small></dd></div>
+            <div><dt>Drones</dt><dd>{String(live).padStart(2, '0')}</dd></div>
+            <div><dt>Teams</dt><dd>{String(teams).padStart(2, '0')}</dd></div>
+            <div className={alertCount ? 'hot' : ''}><dt>Alerts</dt><dd>{String(alertCount).padStart(2, '0')}</dd></div>
+          </dl>
+        )}
+        <span className="sim-pill">Simulated · decision support only</span>
       </header>
 
       <main>
         <section className={`maps ${alt ? 'split' : ''}`}>
           {scenario ? (
             <>
-              <MapView scenario={scenario} t={t} layers={layers} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack}
+              <MapView scenario={scenario} t={t} playing={playing} layers={layers} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack}
                 reconRoute={reconRoute} label={alt ? 'Baseline' : undefined}
                 onWhatIf={runWhatIf} moveSensor={moveSensor} onMoveSensor={setMoveSensor} />
               {alt && (
                 <div className="alt">
-                  <MapView scenario={alt.scenario} t={Math.min(t, alt.scenario.frames.length - 1)} layers={layers}
+                  <MapView scenario={alt.scenario} t={Math.min(t, alt.scenario.frames.length - 1)} playing={playing} layers={layers}
                     selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack} reconRoute={null} label={alt.label} />
                   <button className="close-alt" onClick={() => setAlt(null)}>Close what-if ✕</button>
                 </div>

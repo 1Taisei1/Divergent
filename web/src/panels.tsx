@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { explain, reconAbort, reconApprove, reconPropose } from './data';
+import { pad3 } from './drones';
 import { pct } from './geo';
 import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
@@ -14,16 +15,17 @@ export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l
           <span>{LAYERS[k]}</span>
         </label>
       ))}
-      <div className="legend">
-        <div><i style={{ background: '#4da3ff' }} /> Allied sensor</div>
-        <div><i style={{ background: '#ff4d4d' }} /> Enemy sensor</div>
-        <div><i style={{ background: '#7ff0ff' }} /> Detection</div>
-        <div><i style={{ background: '#8a8f98' }} /> Clutter</div>
-        <div><i style={{ background: '#ffe14d' }} /> Track</div>
-        <div><i style={{ background: '#ff8a3d' }} /> Likely launch area</div>
-        <div><i style={{ background: '#a070ff' }} /> Next-launch forecast</div>
+      <div className="legend" role="list" aria-label="Legend">
+        <div role="listitem"><i className="lg-quad hostile" /> Hostile drone</div>
+        <div role="listitem"><i className="lg-quad friendly" /> Survey drone</div>
+        <div role="listitem"><i className="lg-box allied" /> Allied sensor</div>
+        <div role="listitem"><i className="lg-box enemy" /> Enemy sensor</div>
+        <div role="listitem"><i className="lg-dot det" /> Detection</div>
+        <div role="listitem"><i className="lg-dot clutter" /> Clutter</div>
+        <div role="listitem"><i className="lg-ret" /> Estimated launch site</div>
+        <div role="listitem"><i className="lg-fill forecast" /> Next-launch forecast</div>
       </div>
-      <p className="hint">Click a track to see which sensors fed it. Right-click an allied sensor for what-if.</p>
+      <p className="hint">Click a drone to see which sensors fed its track. Right-click an allied sensor for a what-if.</p>
     </div>
   );
 }
@@ -38,10 +40,10 @@ export function AlertsTab({ scenario, t, onJump }: { scenario: Scenario; t: numb
   return (
     <div className="panel">
       {alerts.map((a, i) => (
-        <button key={i} className={`alert kind-${a.kind}`} onClick={() => onJump(a.t)}>
-          <div className="alert-meta">t = {a.t} s · {a.kind.replace(/_/g, ' ')}</div>
-          <div>{a.message}</div>
-          <div className="alert-action"><b>{a.recommended_action}</b></div>
+        <button key={i} className={`alert kind-${a.kind}`} onClick={() => onJump(a.t)} title={`Jump to T+${pad3(a.t)}`}>
+          <div className="alert-meta"><span className="tcode">T+{pad3(a.t)}</span><span className="kind">{a.kind.replace(/_/g, ' ')}</span></div>
+          <div className="alert-msg">{a.message}</div>
+          <div className="alert-action"><span aria-hidden="true">&gt;&gt; </span>{a.recommended_action}</div>
         </button>
       ))}
     </div>
@@ -130,7 +132,7 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
           <div className="log">
             <div className="alert-meta">Log</div>
             {route.log.filter((e) => e.t <= t).map((e, i) => <div key={i}>t = {e.t} s · {e.event}{e.by ? ` by ${e.by}` : ''}</div>)}
-            {route.approved_by && <div>Approved by <b>{route.approved_by}</b> at t = {route.approved_at} s</div>}
+            {route.approved_by && <div>Approved by <b>{route.approved_by}</b>{typeof route.approved_at === 'number' ? ` at T+${pad3(route.approved_at)}` : ''}</div>}
           </div>
         </div>
       )}
