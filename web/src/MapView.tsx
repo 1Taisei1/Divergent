@@ -5,6 +5,7 @@ import {
   Circle, CircleMarker, ImageOverlay, MapContainer, Marker, Pane, Polygon, Polyline, Rectangle, Tooltip, useMap, useMapEvents,
 } from 'react-leaflet';
 import { CursorReadout, DroneMarker, HUD, headingDeg, pad3, RadarSweep, reticleIcon, ScaleBar, sensorIcon, speedMs } from './drones';
+import { conePolygon, isTriangulated, sitesOf } from './backtrack';
 import { arrowHead, ellipsePolygon, gridBounds, gridImage, hasHeat, ll, llp, MAP_SIZE, pct, RAMPS } from './geo';
 import type { Detection, Frame, ReconRoute, Scenario, Track, WhatIfRequest } from './types';
 
@@ -15,6 +16,7 @@ export const LAYERS = {
   clutter: 'Clutter',
   tracks: 'Tracks + uncertainty',
   origins: 'Origin estimates',
+  backtrack: 'Backtrack rays',
   originHeat: 'Origin heat map',
   forecast: 'Next-launch forecast',
   launchTeams: 'Launch-team moves',
@@ -204,17 +206,44 @@ export default function MapView(p: Props) {
           );
         })}
 
+        {on.backtrack && frame?.origins.map((o) => {
+          // Rays from where each drone was first seen back to where it launched; lone drones get a cone (range unknown).
+          const tr = frame.tracks.find((x) => x.id === o.track_id);
+          if (!tr?.points.length) return null;
+          const faded = !!sel && sel.id !== o.track_id;
+          if (!isTriangulated(o)) {
+            const cone = conePolygon(tr);
+            return cone ? (
+              <Polygon key={`ray-${o.track_id}`} positions={cone} interactive={false}
+                pathOptions={{ color: '#ff8a3d', weight: 1, opacity: faded ? 0.1 : 0.35, fillOpacity: faded ? 0.03 : 0.08, dashArray: '3 5' }} />
+            ) : null;
+          }
+          return (
+            <Polyline key={`ray-${o.track_id}`} positions={[ll(tr.points[0].x, tr.points[0].y), llp(o.peak)]} interactive={false}
+              pathOptions={{ color: '#ffb37a', weight: 2, opacity: faded ? 0.15 : 0.85, dashArray: '8 6' }} />
+          );
+        })}
+        {on.backtrack && sitesOf(frame).map((site) => (
+          <CircleMarker key={`site-${site.key}`} center={llp(site.peak)} radius={2} interactive={false} pathOptions={{ opacity: 0, fillOpacity: 0 }}>
+            <Tooltip permanent direction="top" offset={[0, -18]} className="map-label backtrack-label">
+              {`SITE · ${site.trackIds.length} DRONES AGREE · ±${Math.round(site.radius_m)} M`}
+            </Tooltip>
+          </CircleMarker>
+        ))}
+
         {on.origins && frame?.origins.map((o) => {
           // Permanent labels only for live (or selected) tracks; lost tracks' origins keep a hover label so they don't pile up.
           const lost = frame.tracks.find((x) => x.id === o.track_id)?.status === 'lost';
           const isSel = sel?.id === o.track_id;
           const faded = (sel && !isSel) || (!sel && lost);
+          // a triangulated drone is covered by its site's "N DRONES AGREE" label unless selected
+          const pinned = isSel || (!lost && !(on.backtrack && isTriangulated(o)));
           return (
             <span key={o.track_id}>
               <Circle center={llp(o.peak)} radius={o.radius_m} interactive={false}
                 pathOptions={{ color: '#ff8a3d', weight: 1.5, dashArray: '4 6', fillOpacity: 0, opacity: faded ? 0.25 : 0.9 }} />
               <Marker position={llp(o.peak)} icon={reticleIcon(!!faded)} interactive={false} zIndexOffset={400}>
-                <Tooltip key={String(!lost || isSel)} permanent={!lost || isSel} direction="left" offset={[-16, 0]} className="map-label origin-label">
+                <Tooltip key={String(pinned)} permanent={pinned} direction="left" offset={[-16, 0]} className="map-label origin-label">
                   {`${o.track_id} ORIGIN ${pct(o.confidence)}`}
                 </Tooltip>
               </Marker>
