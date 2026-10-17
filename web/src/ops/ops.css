@@ -20,11 +20,12 @@
 /* The mission tabs own the top row on their own (the SIM badge used to sit on top of tab 05). The SIM badge, AO strip,
    zoom and camera controls stack down the right edge underneath it. */
 .ops .ops-modes { max-width: calc(100% - 32px); }
-.ops .sim-badge { top: 64px; }
-.ops-ao { position: absolute; z-index: 5; top: 98px; right: 16px; max-width: 46ch; padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); background: oklch(0.13 0.005 60 / 0.85); border: 1px solid var(--line); text-align: right; pointer-events: none; }
+.ops .sim-badge { top: 64px; right: 26px; }
+.ops-ao { max-width: 46ch; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); }
 .ops-ao b { color: var(--text); }
-.ops .maplibregl-ctrl-top-right { top: 132px; }
-.ops-camera { top: 252px; }
+.ops .maplibregl-ctrl-top-right { top: 98px; right: 26px; }
+.ops .ops-camera-drop { position: absolute; z-index: 5; top: 214px; right: 26px; }
+.ops-camera-drop .ops-camera { position: static; margin-top: 4px; }
 
 /* Viewport corner brackets (same device as the 2D map), under the floating panels */
 .ops .hud-frame { inset: 6px; z-index: 4; }
@@ -59,3 +60,20 @@
   .ops-camera { top: auto; bottom: 46%; right: 8px; } /* stay clear of the bottom sheet card */
   .ops-card { max-height: 34%; }
 }
+
+/* Overlay dropdowns (legend, camera): closed by default to keep the map clear */
+.ops-drop > summary { cursor: pointer; padding: 5px 10px; font: 800 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); background: var(--panel); border: 1px solid var(--line-2); list-style: none; }
+.ops-drop > summary::-webkit-details-marker { display: none; }
+.ops-drop > summary::after { content: ' ▾'; }
+.ops-drop[open] > summary { color: var(--text); }
+.ops-drop[open] > summary::after { content: ' ▴'; }
+.ops-legend.ops-drop { padding: 0; background: none; border: 0; gap: 0; }
+.ops-legend.ops-drop > :not(summary) { background: oklch(0.13 0.005 60 / 0.88); padding: 6px 10px; border: 1px solid var(--line-2); border-top: 0; }
+
+/* Smooth dropdowns: content fades and slides in; height eases where the browser supports details-content transitions */
+@keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.ops-drop[open] > :not(summary), .ops-card > :not(.ops-collapse) { animation: drop-in 220ms cubic-bezier(0.25, 1, 0.5, 1); }
+.ops-drop { interpolate-size: allow-keywords; }
+.ops-drop::details-content { height: 0; overflow: clip; transition: height 220ms cubic-bezier(0.25, 1, 0.5, 1), content-visibility 220ms allow-discrete; }
+.ops-drop[open]::details-content { height: auto; }
+.ops-drop > summary, .ops-camera button { transition: color 150ms ease, background-color 150ms ease; }

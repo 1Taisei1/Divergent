@@ -128,6 +128,8 @@ type Props = {
   onJump?: (t: number) => void;
 };
 
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2); // cubic: soft start and stop
+
 export default function OpsMap(p: Props) {
   const { scenario: s, t } = p;
   const box = useRef<HTMLDivElement>(null);
@@ -665,15 +667,15 @@ export default function OpsMap(p: Props) {
   }, [push]);
 
   // ---- camera ----
-  const cam = (o: { pitch?: number; bearing?: number }) => mapRef.current?.easeTo({ ...o, duration: 600 });
+  const cam = (o: { pitch?: number; bearing?: number }) => mapRef.current?.easeTo({ ...o, duration: 900, easing: easeInOut, essential: true });
   const recenter = (bounds = activityBounds(s), zoomIn = OPENING_ZOOM_IN) => {
     const map = mapRef.current;
     if (!map) return;
     const { pitch: pt, bearing: br } = { pitch: map.getPitch(), bearing: map.getBearing() };
     const cam0 = map.cameraForBounds(bounds, { padding: framePadding(map) });
-    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? zoomIn : 0), pitch: pt, bearing: br, duration: 600 });
+    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? zoomIn : 0), pitch: pt, bearing: br, duration: 900, easing: easeInOut, essential: true });
   };
-  const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1200 });
+  const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1800, easing: easeInOut, essential: true });
 
   const m = MODES.find((x) => x.id === mode)!;
   const selectMode = (id: OpsMode) => { setMode(id); setPickStart(false); if (id === 'survey' && mode !== 'survey') recenter(BOX_BOUNDS, 0); };
@@ -709,7 +711,6 @@ export default function OpsMap(p: Props) {
       </div>
       <div className="badge sim-badge">SIM // ALL DATA SIMULATED</div>
       {!hidden && <div className="hud-frame" aria-hidden="true"><i /><i /><i /><i /></div>}
-      {!hidden && <div className="ops-ao" aria-label="Area of operations">AO <b>NTC FORT IRWIN</b> · 10 KM BOX · ILLUSTRATIVE PLACEMENT ON REAL TERRAIN</div>}
 
       {!hidden && (<>
       <section ref={card} className={`ops-card${cardOpen ? '' : ' is-collapsed'}`} aria-label={`${m.label} panel`}>
@@ -803,7 +804,8 @@ export default function OpsMap(p: Props) {
         </>)}
       </section>
 
-      <div className="ops-legend" aria-label="Heat legend">
+      <details className="ops-legend ops-drop" aria-label="Heat legend">
+        <summary>Legend</summary>
         <span className="micro">{m.red}</span>
         <div className="ops-ramp">
           <span>{m.low}</span>
@@ -822,8 +824,10 @@ export default function OpsMap(p: Props) {
         <div className="ops-nato" aria-label="Symbol key">
           {NATO_KEY.map((a) => <span key={a}><i dangerouslySetInnerHTML={{ __html: natoSvg(a, 16) }} />{AFFIL[a].label}</span>)}
         </div>
-      </div>
+        <div className="ops-ao" aria-label="Area of operations">AO <b>NTC FORT IRWIN</b> · 10 KM BOX · ILLUSTRATIVE PLACEMENT ON REAL TERRAIN</div>
+      </details>
 
+      <details className="ops-camera-drop ops-drop"><summary>Camera</summary>
       <div className="ops-camera" aria-label="Camera">
         <button className={pitch < 5 ? 'on' : ''} onClick={() => cam({ pitch: 0, bearing: 0 })}>2D</button>
         <button className={pitch >= 5 ? 'on' : ''} onClick={() => cam({ pitch: 62, bearing: bearing || -20 })}>3D</button>
@@ -834,6 +838,7 @@ export default function OpsMap(p: Props) {
         <button onClick={() => (mode === 'survey' ? recenter(BOX_BOUNDS, 0) : recenter())} aria-label="Recenter">⌖</button>
         <output ref={camOut} className="ops-cam-readout">P{pad3(pitch)} B{pad3((bearing + 360) % 360)}</output>
       </div>
+      </details>
       </>)}
     </div>
   );

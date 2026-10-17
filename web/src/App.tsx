@@ -48,6 +48,7 @@ export default function App() {
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState<Source>(dataSource());
   const [view, setView] = useState<'ops' | 'classic'>(hasWebGL2 ? 'ops' : 'classic');
+  const [sideOpen, setSideOpen] = useState(true);
   const [acked, setAcked] = useState<Set<string>>(() => new Set());
   const ack = useCallback((key: string) => setAcked((s) => new Set(s).add(key)), []);
 
@@ -122,10 +123,10 @@ export default function App() {
   const teams = frame?.launch_teams.length ?? 0;
 
   return (
-    <div className="app">
+    <div className={`app${sideOpen ? '' : ' side-closed'}`}>
       <div className="classification" role="note">UNCLASSIFIED // EXERCISE // SIMULATED DATA</div>
       <header>
-        <h1 className="brand"><span className="brand-mark">Divergent</span><span className="brand-sub">Drone origin picture</span></h1>
+        <h1 className="brand"><span className="brand-mark">Divergent</span></h1>
         <label className="scenario">
           <span className="micro">Scenario</span>
           <select value={sid} onChange={(e) => setSid(e.target.value)}>
@@ -135,12 +136,6 @@ export default function App() {
         <span className={`src ${source === 'api' ? 'live' : ''}`} title={apiUrl || 'fixtures/scenario_demo.json'}>
           {source === 'api' ? 'Live API' : source === 'fallback' ? 'API unreachable · fixture' : 'Fixture'}
         </span>
-        <div className="view-switch" role="group" aria-label="Map view">
-          <button className={shownView === 'ops' ? 'on' : ''} aria-pressed={shownView === 'ops'} disabled={!hasWebGL2 || !!alt}
-            title={!hasWebGL2 ? 'This device has no WebGL2' : alt ? 'Close the what-if to return to 3D' : undefined}
-            onClick={() => setView('ops')}>3D ops</button>
-          <button className={shownView === 'classic' ? 'on' : ''} aria-pressed={shownView === 'classic'} onClick={() => setView('classic')}>2D classic</button>
-        </div>
         {busy && <span className="busy">{busy}</span>}
         {err && <span className="error inline" title={err}>{err}</span>}
         <span className="spacer" />
@@ -182,7 +177,7 @@ export default function App() {
           )}
         </section>
 
-        <aside>
+        <aside hidden={!sideOpen}>
           <nav>
             {TABS_FOR[shownView].map((x) => (
               <button key={x} className={shownTab === x ? 'on' : ''} onClick={() => setTab(x)}>
@@ -204,6 +199,10 @@ export default function App() {
         </aside>
       </main>
 
+      <button className="side-toggle" onClick={() => setSideOpen((v) => !v)} aria-expanded={sideOpen}
+        aria-label={sideOpen ? 'Hide side panel' : 'Show side panel'} title={sideOpen ? 'Hide alerts and metrics' : 'Show alerts and metrics'}>
+        {sideOpen ? '▶' : '◀'}
+      </button>
       <Timeline t={t} max={maxT} playing={playing} onT={(x) => setT(x)} onPlay={onPlay} marks={alertMarks} events={alertEvents} />
       <div className="classification" role="note">UNCLASSIFIED // EXERCISE // SIMULATED DATA</div>
     </div>
