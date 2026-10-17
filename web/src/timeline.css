@@ -91,3 +91,6 @@
   .tl-count { display: none; }
   .tl-tick.alt em { display: none; } /* every other label, so three-digit ticks never touch */
 }
+
+/* Overlay on the map (left column; the sidebar keeps its width) instead of taking its own row */
+.app > .tl { position: absolute; left: 0; right: max(320px, 30%); bottom: 22px; background: linear-gradient(to top, oklch(0.13 0.005 60 / 0.6), oklch(0.13 0.005 60 / 0.15)); border-top: 0; backdrop-filter: blur(1px); }

@@ -160,7 +160,7 @@ export default function AutonomyPanel({
       <dl className="ops-data">
         <div><dt>Mapped</dt><dd>{pct(s.coverage)}</dd></div>
         <div className={s.battery < 0.25 ? 'hot' : ''}><dt>Battery</dt><dd>{pct(s.battery)}</dd></div>
-        <div className={s.risk > maxRisk * 0.8 ? 'hot' : ''}><dt>Risk / limit</dt><dd>{pct(s.risk)}<small> / {pct(maxRisk)}</small></dd></div>
+        <div className={s.risk > maxRisk * 0.8 ? 'hot' : ''}><dt>Risk / advisory</dt><dd>{pct(s.risk)}<small> / {pct(maxRisk)}</small></dd></div>
         <div><dt>Legs flown</dt><dd>{s.legs}</dd></div>
       </dl>
 
@@ -169,7 +169,7 @@ export default function AutonomyPanel({
       {idle && (
         <>
           {area}
-          <p className="ops-note">Simulated. The drone plans and flies survey legs on its own, but only after a named operator arms it. Geofence, risk limit and automatic return-to-home are enforced. Surveillance and mapping only.</p>
+          <p className="ops-note">Simulated. The drone plans and flies survey legs on its own, but only after a named operator arms it. It flies wherever the survey area is, even into enemy coverage, and maps the whole way; threat is shown and logged, never a stop. Geofence and battery return-to-home are enforced. Surveillance and mapping only.</p>
           <label className="field auto-op">
             Operator name
             <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') arm(); }} placeholder="Name of arming operator" autoComplete="off" />

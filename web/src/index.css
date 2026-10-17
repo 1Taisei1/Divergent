@@ -1,29 +1,30 @@
 /* Tactical telemetry: warm-graphite substrate, white-phosphor text, one hazard-red accent in the chrome.
    The map keeps a small data palette (allied blue, origin amber, forecast violet, safe green) so sides stay readable. */
 :root {
-  --bg: oklch(0.155 0.005 60);
-  --map: oklch(0.13 0.005 60);
-  --panel: oklch(0.185 0.006 60);
-  --panel-2: oklch(0.225 0.007 60);
-  --panel-3: oklch(0.265 0.008 60);
-  --line: oklch(0.33 0.008 60);
-  --line-2: oklch(0.48 0.01 60);
-  --text: oklch(0.94 0.008 85);
-  --muted: oklch(0.76 0.012 75);
-  --faint: oklch(0.6 0.01 70);
-  --hazard: oklch(0.62 0.22 28);
+  --bg: oklch(0.1 0 0);
+  --map: oklch(0.08 0 0);
+  --panel: oklch(0.14 0.004 25);
+  --panel-2: oklch(0.18 0.006 25);
+  --panel-3: oklch(0.23 0.012 25);
+  --line: oklch(0.3 0.015 25);
+  --line-2: oklch(0.44 0.05 25);
+  --text: oklch(0.96 0.004 25);
+  --muted: oklch(0.74 0.01 25);
+  --faint: oklch(0.58 0.01 25);
+  --hazard: oklch(0.58 0.24 27);
   --hazard-ink: oklch(0.98 0.01 28);
-  --phosphor: oklch(0.86 0.24 142);
+  --phosphor: oklch(0.66 0.24 27);
   --allied: oklch(0.73 0.14 250);
   --origin: oklch(0.82 0.16 72);
   --ok: oklch(0.8 0.15 155);
   --warn: oklch(0.83 0.15 75);
   --bad: var(--hazard);
-  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  --display: 'Archivo', 'Arial Narrow', Arial, sans-serif;
+  --mono: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display: var(--mono);
   --ease: cubic-bezier(0.25, 1, 0.5, 1);
   font: 500 16px/1.45 var(--mono);
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
@@ -37,17 +38,15 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .micro { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 
-.app { display: grid; grid-template-rows: auto auto 1fr auto auto; height: 100vh; }
+.app { display: grid; grid-template-rows: auto auto 1fr auto; height: 100vh; position: relative; }
 
 /* Classification banners (top and bottom): green = UNCLASSIFIED; this is an exercise on simulated data */
-.classification { background: oklch(0.55 0.13 150); color: oklch(0.98 0.01 150); text-align: center; font: 800 12px/1.6 var(--mono); letter-spacing: 0.18em; padding: 1px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.classification { background: oklch(0.38 0.17 27); color: oklch(0.98 0.01 28); text-align: center; font: 800 12px/1.6 var(--mono); letter-spacing: 0.18em; padding: 1px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Header: wordmark, scenario, source, live telemetry */
 header { display: flex; align-items: stretch; gap: 16px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; flex-wrap: wrap; }
-.brand { display: flex; align-items: center; gap: 12px; margin: 0; padding-right: 16px; border-right: 1px solid var(--line); }
-.brand-logo { flex: none; display: block; color: var(--text); }
-.brand-text { display: flex; flex-direction: column; justify-content: center; }
-.brand-mark { font: 900 30px/0.9 var(--display); font-stretch: 72%; letter-spacing: -0.01em; text-transform: uppercase; }
+.brand { display: flex; flex-direction: column; justify-content: center; margin: 0; padding-right: 16px; border-right: 1px solid var(--line); }
+.brand-mark { font: 800 24px/1 var(--display); letter-spacing: 0.04em; color: var(--hazard); text-transform: uppercase; }
 .brand-sub { font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
 .scenario { display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .scenario select { background: var(--panel-2); border: 1px solid var(--line); padding: 5px 8px; max-width: 340px; font-weight: 700; }
@@ -290,7 +289,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 .ops-tip { font: 500 14px/1.35 var(--mono) !important; background: var(--panel) !important; color: var(--text) !important; border: 1px solid var(--line-2); padding: 4px 8px !important; }
 
 .ops-modes { position: absolute; top: 16px; left: 16px; z-index: 5; display: flex; border: 1px solid var(--line-2); background: var(--panel); max-width: calc(100% - 260px); overflow-x: auto; scrollbar-width: none; }
-.ops-modes button { background: none; border: 0; padding: 8px 14px; font-size: 14px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; transition: color 150ms var(--ease); }
+.ops-modes button { background: none; border: 0; padding: 8px 10px; font-size: 13px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; transition: color 150ms var(--ease); }
 .ops-modes button + button { border-left: 1px solid var(--line); }
 .ops-modes button:hover { color: var(--text); }
 .ops-modes button.on { color: var(--text); border-bottom-color: var(--hazard); background: var(--panel-3); }
@@ -323,7 +322,7 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 .ops-list button.on span { color: var(--bg); }
 .ops-list b.hostile { color: var(--hazard); } .ops-list b.lost { color: var(--faint); } .ops-list b.safe { color: var(--ok); }
 
-.ops-legend { position: absolute; z-index: 5; left: 16px; bottom: 44px; background: oklch(0.13 0.005 60 / 0.88); border: 1px solid var(--line-2); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.ops-legend { position: absolute; z-index: 5; left: 16px; bottom: 140px; background: oklch(0.13 0.005 60 / 0.88); border: 1px solid var(--line-2); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .ops-ramp { display: flex; align-items: center; gap: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .ops-ramp span { padding: 0 8px; }
 .ops-ramp i { width: 26px; height: 12px; display: block; }
@@ -374,3 +373,11 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 .preset.on { color: var(--text); border-color: var(--text); }
 .expander { align-self: flex-start; }
 .explain-box { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+
+/* Collapsible right sidebar: the map takes the space when it is hidden */
+.app.side-closed main { grid-template-columns: minmax(0, 1fr); }
+.app.side-closed > .tl { right: 0; }
+aside[hidden] { display: none; }
+.side-toggle { position: absolute; z-index: 1200; top: 78%; right: max(320px, 30%); transform: translateY(-50%); width: 22px; height: 64px; padding: 0; background: var(--panel); border: 1px solid var(--line-2); border-right: 0; color: var(--muted); font-size: 12px; cursor: pointer; }
+.side-toggle:hover { color: var(--text); background: var(--panel-3); }
+.app.side-closed .side-toggle { right: 0; }

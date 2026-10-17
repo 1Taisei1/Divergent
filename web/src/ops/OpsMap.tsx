@@ -20,7 +20,7 @@ import {
 import { coverageLayers } from './coverage';
 import { toMGRS } from './mgrs';
 import { detectionField, enemyOriginField, hostileActivityField, routeThreatField, safeLaunchField } from './analytics';
-import { heatFrame, legendSwatches, lift, type HeatFrame, type Palette } from './heat';
+import { heatFrame, legendSwatches, lift, revealFrame, type HeatFrame, type Palette } from './heat';
 import { addHeatLayers, setHeat } from './heatTiles';
 import { planRoutes } from './route';
 import AutonomyPanel from './AutonomyPanel';
@@ -39,7 +39,7 @@ const MODES: { id: OpsMode; code: string; label: string; palette: Palette; red: 
   { id: 'enemy', code: '01', label: 'Enemy origins', palette: 'threat', red: 'Red = likely enemy launch area (model estimate)', low: 'Unlikely', high: 'Likely' },
   { id: 'launch', code: '02', label: 'Safe launch', palette: 'safe', red: 'Green = safest place for us to launch (model estimate)', low: 'Exposed', high: 'Safest' },
   { id: 'route', code: '03', label: 'Route plan', palette: 'threat', red: 'Red = threat: enemy detection, activity, launch areas', low: 'Clear', high: 'Threat' },
-  { id: 'survey', code: '04', label: 'Auto survey', palette: 'unknown', red: 'Amber = unsurveyed, high-value ground', low: 'Mapped', high: 'Unknown' },
+  { id: 'survey', code: '04', label: 'Auto survey', palette: 'unknown', red: 'Amber = not yet mapped · red = danger the drone mapped', low: 'Low value', high: 'Unknown' },
   { id: 'provenance', code: '05', label: 'Provenance', palette: 'threat', red: '', low: '', high: '' },
 ];
 
@@ -95,6 +95,7 @@ const HEAT_STEP_S = 2;
 // Autonomous survey clock: 10 ticks per real second; decision phases run at 2x so MAP / PLAN / UPDATE stay readable,
 // transit runs at 10x so a whole sortie fits in a couple of minutes of demo.
 const MISSION_TICK_S = 0.1, MISSION_RATE_DECIDE = 2, MISSION_RATE_FLY = 10;
+const SURVEY_HEAT_S = 5; // mission seconds between survey-heat redraws (0.5 s real time in flight)
 const noop = () => undefined;
 // A drawn survey area is at least this wide, and always inside the geofence.
 const MIN_AREA_M = 800;
@@ -126,6 +127,8 @@ type Props = {
   reconRoute: ReconRoute | null;
   onJump?: (t: number) => void;
 };
+
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2); // cubic: soft start and stop
 
 export default function OpsMap(p: Props) {
   const { scenario: s, t } = p;
@@ -370,6 +373,16 @@ export default function OpsMap(p: Props) {
     });
   }, [frame, prev, t]);
 
+  // Tab 04 heat = what the drone has uploaded: mapped ground shows the danger it found (red) or clear (green), the
+  // rest stays amber. Redrawn every SURVEY_HEAT_S mission seconds (about twice a second in flight), not every tick.
+  const surveyTick = Math.floor(shownMission.clockS / SURVEY_HEAT_S);
+  const surveyHeat = useMemo(() => {
+    if (mode !== 'survey') return null;
+    const u = uncertaintyGrid(shownMission);
+    return threat ? revealFrame(threat, u, shownMission.covered) : heatFrame(u, 'unknown');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shownMission is read on the throttled tick
+  }, [mode, threat, idlePreview, surveyTick, shownMission.phase, shownMission.findings.length]);
+
   // ---- MapLibre: heat + draped vectors per tab ----
   useEffect(() => {
     const map = mapRef.current;
@@ -378,7 +391,7 @@ export default function OpsMap(p: Props) {
     if (mode === 'enemy' && fusedOrigin) heat = heatFrame(lift(fusedOrigin, 0.55), 'threat'); // show the back-projected cones, not just the peaks
     if (mode === 'launch' && fusedLaunch) heat = heatFrame(lift(fusedLaunch, 0.5), 'safe'); // rank the whole box, not only the top sites
     if (mode === 'route' && threat) heat = heatFrame(threat, 'threat');
-    if (mode === 'survey') heat = heatFrame(uncertaintyGrid(shownMission), 'unknown');
+    if (mode === 'survey') heat = surveyHeat;
     setHeat(map, heat?.canvas ?? null, heat?.key ?? '', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
 
     // setData re-tiles in a worker, so only send sources whose contents actually changed.
@@ -396,7 +409,7 @@ export default function OpsMap(p: Props) {
     set('routes', mode === 'route' ? [...routeLines.filter((f) => !f.properties?.active), ...routeLines.filter((f) => f.properties?.active)] : []);
     const rr = p.reconRoute;
     set('recon', rr && (mode === 'enemy' || mode === 'route') ? [line(rr.waypoints.map((q) => toLngLat(q.x, q.y))), ...(frame.recon ? [poly([circleRing(frame.recon.x, frame.recon.y, 1000, 48)])] : [])] : []);
-  }, [ready, frame, mode, s, fusedOrigin, fusedLaunch, threat, routes, activeRoute, p.reconRoute, shownMission]);
+  }, [ready, frame, mode, s, fusedOrigin, fusedLaunch, threat, routes, activeRoute, p.reconRoute, surveyHeat]);
 
   // ---- deck.gl: 3D objects ----
   const layers = useMemo(() => {
@@ -654,15 +667,15 @@ export default function OpsMap(p: Props) {
   }, [push]);
 
   // ---- camera ----
-  const cam = (o: { pitch?: number; bearing?: number }) => mapRef.current?.easeTo({ ...o, duration: 600 });
+  const cam = (o: { pitch?: number; bearing?: number }) => mapRef.current?.easeTo({ ...o, duration: 900, easing: easeInOut, essential: true });
   const recenter = (bounds = activityBounds(s), zoomIn = OPENING_ZOOM_IN) => {
     const map = mapRef.current;
     if (!map) return;
     const { pitch: pt, bearing: br } = { pitch: map.getPitch(), bearing: map.getBearing() };
     const cam0 = map.cameraForBounds(bounds, { padding: framePadding(map) });
-    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? zoomIn : 0), pitch: pt, bearing: br, duration: 600 });
+    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? zoomIn : 0), pitch: pt, bearing: br, duration: 900, easing: easeInOut, essential: true });
   };
-  const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1200 });
+  const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1800, easing: easeInOut, essential: true });
 
   const m = MODES.find((x) => x.id === mode)!;
   const selectMode = (id: OpsMode) => { setMode(id); setPickStart(false); if (id === 'survey' && mode !== 'survey') recenter(BOX_BOUNDS, 0); };
@@ -698,7 +711,6 @@ export default function OpsMap(p: Props) {
       </div>
       <div className="badge sim-badge">SIM // ALL DATA SIMULATED</div>
       {!hidden && <div className="hud-frame" aria-hidden="true"><i /><i /><i /><i /></div>}
-      {!hidden && <div className="ops-ao" aria-label="Area of operations">AO <b>NTC FORT IRWIN</b> · 10 KM BOX · ILLUSTRATIVE PLACEMENT ON REAL TERRAIN</div>}
 
       {!hidden && (<>
       <section ref={card} className={`ops-card${cardOpen ? '' : ' is-collapsed'}`} aria-label={`${m.label} panel`}>
@@ -792,19 +804,30 @@ export default function OpsMap(p: Props) {
         </>)}
       </section>
 
-      <div className="ops-legend" aria-label="Heat legend">
+      <details className="ops-legend ops-drop" aria-label="Heat legend">
+        <summary>Legend</summary>
         <span className="micro">{m.red}</span>
         <div className="ops-ramp">
           <span>{m.low}</span>
           {legendSwatches(m.palette).map((c, i) => <i key={i} style={{ background: c }} />)}
           <span>{m.high}</span>
         </div>
+        {mode === 'survey' && (
+          <div className="ops-ramp" aria-label="Mapped ground: danger level">
+            <span>Mapped clear</span>
+            <i style={{ background: legendSwatches('safe')[1] }} />
+            {legendSwatches('threat').map((c, i) => <i key={i} style={{ background: c }} />)}
+            <span>Danger</span>
+          </div>
+        )}
         {fusionNote && <span className="ops-fused">{fusionNote}</span>}
         <div className="ops-nato" aria-label="Symbol key">
           {NATO_KEY.map((a) => <span key={a}><i dangerouslySetInnerHTML={{ __html: natoSvg(a, 16) }} />{AFFIL[a].label}</span>)}
         </div>
-      </div>
+        <div className="ops-ao" aria-label="Area of operations">AO <b>NTC FORT IRWIN</b> · 10 KM BOX · ILLUSTRATIVE PLACEMENT ON REAL TERRAIN</div>
+      </details>
 
+      <details className="ops-camera-drop ops-drop"><summary>Camera</summary>
       <div className="ops-camera" aria-label="Camera">
         <button className={pitch < 5 ? 'on' : ''} onClick={() => cam({ pitch: 0, bearing: 0 })}>2D</button>
         <button className={pitch >= 5 ? 'on' : ''} onClick={() => cam({ pitch: 62, bearing: bearing || -20 })}>3D</button>
@@ -815,6 +838,7 @@ export default function OpsMap(p: Props) {
         <button onClick={() => (mode === 'survey' ? recenter(BOX_BOUNDS, 0) : recenter())} aria-label="Recenter">⌖</button>
         <output ref={camOut} className="ops-cam-readout">P{pad3(pitch)} B{pad3((bearing + 360) % 360)}</output>
       </div>
+      </details>
       </>)}
     </div>
   );
