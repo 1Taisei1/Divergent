@@ -816,7 +816,6 @@ export default function OpsMap(p: Props) {
         <output ref={camOut} className="ops-cam-readout">P{pad3(pitch)} B{pad3((bearing + 360) % 360)}</output>
       </div>
       </>)}
-      <div ref={cursor} className="hud-readout ops-readout" aria-hidden="true" hidden={hidden}>CURSOR OFF MAP</div>
     </div>
   );
 }
