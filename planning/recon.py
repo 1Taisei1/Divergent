@@ -73,6 +73,25 @@ def _path_length(points: list[tuple[float, float]]) -> float:
     return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:]))
 
 
+def _step_toward(pos, target, home_xy, total_len, exposure_grid):
+    """Point up to PICK_RADIUS_M from pos toward target that leaves budget to fly home and stays below the
+    auto-return risk; None if no such step of at least 100 m."""
+    if target is None:
+        return None
+    dist = math.hypot(target[0] - pos[0], target[1] - pos[1])
+    if dist < 1.0:
+        return None
+    step = min(PICK_RADIUS_M, dist)
+    while step >= 100.0:
+        x = pos[0] + (target[0] - pos[0]) * step / dist
+        y = pos[1] + (target[1] - pos[1]) * step / dist
+        if (total_len + step + math.hypot(x - home_xy[0], y - home_xy[1]) <= MAX_PATH_M
+                and _exposure_at(exposure_grid, x, y) <= RISK_RETURN_THRESHOLD):
+            return round(x, 1), round(y, 1)
+        step -= 100.0
+    return None
+
+
 def propose(raw: dict, frame: dict, exposure_grid: dict) -> dict:
     """planning/recon.py propose per CONTRACT.md -> ReconRoute (status proposed)."""
     home = raw.get("home_base") or {"x": 0, "y": 0}
@@ -88,6 +107,15 @@ def propose(raw: dict, frame: dict, exposure_grid: dict) -> dict:
     visited: list[tuple[float, float]] = [(home["x"], home["y"])]
     total_len = 0.0
     home_xy = (home["x"], home["y"])
+
+    # highest-value cell on the whole map; used to head that way when nothing nearby has value
+    cell_m = int((forecast or origin_heatmap).get("cell_m") or 100)
+    target, target_value = None, 0.0
+    for gy in range(cell_m // 2, 10000, cell_m):
+        for gx in range(cell_m // 2, 10000, cell_m):
+            v = value_at(gx, gy)
+            if v > target_value:
+                target, target_value = (gx, gy), v
 
     while len(visited) < MAX_WAYPOINTS and total_len < MAX_PATH_M:
         best = None
@@ -106,7 +134,10 @@ def propose(raw: dict, frame: dict, exposure_grid: dict) -> dict:
                     best_score = score
                     best = (x, y)
         if best is None or best_score <= 0.0:
-            break
+            # nothing nearby is worth visiting: step toward the best cell, as far as the path budget allows
+            best = _step_toward(visited[-1], target, home_xy, total_len, exposure_grid)
+            if best is None:
+                break
         step = math.hypot(best[0] - visited[-1][0], best[1] - visited[-1][1])
         back = math.hypot(best[0] - home_xy[0], best[1] - home_xy[1])
         if total_len + step + back > MAX_PATH_M:
@@ -253,7 +284,7 @@ def fly(
                 break
             a, b, seg_len = return_legs[return_idx]
             return_dist += SPEED_MPS
-            if seg_len > 0 and return_dist >= seg_len:
+            if return_dist >= seg_len:  # also covers a zero-length leg (already home)
                 pos = b
                 return_idx += 1
                 return_dist = 0.0

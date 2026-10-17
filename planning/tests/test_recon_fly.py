@@ -145,3 +145,31 @@ def test_detections_from_truth_paths():
             # within detection range of the drone's position at that t
             st = recon_by_t[t]
             assert math.hypot(d["x"] - st["x"], d["y"] - st["y"]) <= 1000.0 + 1e-6
+
+
+def test_far_hotspot_still_leaves_home_within_budget():
+    # value only far from home (beyond the 9000 m round trip): the route still heads that way and gets back
+    raw = fake_raw()
+    eg, _routes = exposure_run(raw)
+    grid = {"cell_m": 100, "width": 100, "height": 100, "values": [[0.0] * 100 for _ in range(100)]}
+    grid["values"][75][15] = 1.0  # ~(1550, 7550), ~9500 m from home
+    frame = {**_frame(), "forecast_heatmap": grid, "origin_heatmap": grid}
+    route = propose(raw, frame, eg)
+    pts = [(w["x"], w["y"]) for w in route["waypoints"]]
+    assert len(pts) >= 3 and pts[0] == pts[-1] == (HOME_BASE["x"], HOME_BASE["y"])
+    path = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
+    assert path <= 9000 + 1e-6
+
+
+def test_route_that_never_leaves_home_ends_returned():
+    raw = fake_raw()
+    eg, _routes = exposure_run(raw)
+    home = {"x": HOME_BASE["x"], "y": HOME_BASE["y"]}
+    route = {"id": "R1", "waypoints": [home], "info_gain": 0, "risk": 0,
+             "geofence": {"x_min": home["x"] - 500, "x_max": home["x"] + 500,
+                          "y_min": home["y"] - 500, "y_max": home["y"] + 500},
+             "status": "approved", "approved_by": "operator", "approved_at": 40,
+             "log": [{"t": 40, "event": "approved", "by": "operator"}]}
+    recon_by_t, _dets, log = fly(raw, route, 40, eg)
+    assert log[-1]["event"] == "returned"
+    assert max(recon_by_t) < 45
