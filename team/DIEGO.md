@@ -41,7 +41,7 @@ Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
   overrides and return the Scenario (don't cache it). Then the Freestyle clone flow: pause the running VM, clone it, apply a
   what-if in the clone, and serve it on its own preview URL. Document the steps in `api/DEPLOY.md`.
 
-- [ ] **8. Explain.** `POST /scenario/{id}/explain?t=N` → build a compact JSON summary of that frame (top origins with
+- [x] **8. Explain.** `POST /scenario/{id}/explain?t=N` → build a compact JSON summary of that frame (top origins with
   confidence, launch-team moves, routes with risk, the latest alerts) and send it to the LLM with the instruction:
   "Summarize in 3 short plain-English lines for an operator. Include confidence. Recommend, never decide." Return `{text}`.
   Fall back to a template string if there's no key.
