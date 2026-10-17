@@ -38,7 +38,34 @@ export function ramp(v: number): [number, number, number, number] {
 
 export const hasValues = (g: MaybeGrid | null | undefined): g is Grid => isGrid(g) && g.values.some((r) => r.some((v) => v > 0.02));
 
-const cache = new WeakMap<Grid, Map<number, HeatFrame>>();
+// Display contrast: v^gamma (gamma < 1 lifts the weak-but-real evidence so the whole computed field reads, not just
+// its peaks). Display only; analytics and routing use the raw field. Cached per grid.
+const lifted = new WeakMap<Grid, Map<number, Grid>>();
+export function lift(g: Grid, gamma: number): Grid {
+  let byGamma = lifted.get(g);
+  if (!byGamma) lifted.set(g, (byGamma = new Map()));
+  const hit = byGamma.get(gamma);
+  if (hit) return hit;
+  const out = { ...g, values: g.values.map((row) => row.map((v) => (v > 0 ? v ** gamma : 0))) };
+  byGamma.set(gamma, out);
+  return out;
+}
+
+// Frames are reused by content: grids are often recomputed with identical values (same estimates, next second).
+const byContent = new Map<string, HeatFrame>();
+const MAX_FRAMES = 12;
+
+// Cheap content key: FNV-1a over values quantized to 1/256 (what the 8-bit ramp can show anyway).
+function contentKey(values: number[][], scale: number, size: number, spread: number): string {
+  let h = 0x811c9dc5;
+  for (const row of values) {
+    for (const v of row) {
+      h ^= Math.round(Math.min(1, Math.max(0, v * scale)) * 255);
+      h = Math.imul(h, 0x01000193);
+    }
+  }
+  return `${(h >>> 0).toString(36)}:${values.length}:${size}:${spread}`;
+}
 
 // Separable Gaussian blur (sigma in cells), rescaled so the peak stays where it was. Display smoothing only.
 function blur(values: number[][], sigma: number): number[][] {
@@ -60,12 +87,12 @@ function blur(values: number[][], sigma: number): number[][] {
 }
 
 // Grid (row 0 = south) → canvas (row 0 = north), values multiplied by `scale` and clipped to 0..1.
-// `spread` (cells) softens small blobs so they read at overview zoom. `key` (a PNG data URL) identifies the contents,
-// so callers can skip work when a recomputed grid renders identically.
+// `spread` (cells) softens small blobs so they read at overview zoom. `key` identifies the rendered contents, so
+// callers (and the tile layer) skip all work when a recomputed grid would render identically.
 export type HeatFrame = { key: string; canvas: HTMLCanvasElement };
 export function heatFrame(g: Grid, scale = 1, size = 320, spread = 0): HeatFrame {
-  const key = Math.round(scale * 1000) * 100 + Math.round(spread * 10);
-  const hit = cache.get(g)?.get(key);
+  const key = contentKey(g.values, scale, size, spread);
+  const hit = byContent.get(key);
   if (hit) return hit;
   const { width: W, height: H } = g;
   const values = spread > 0 ? blur(g.values, spread) : g.values;
@@ -87,9 +114,9 @@ export function heatFrame(g: Grid, scale = 1, size = 320, spread = 0): HeatFrame
     }
   }
   ctx.putImageData(img, 0, 0);
-  const frame = { key: c.toDataURL(), canvas: c };
-  if (!cache.has(g)) cache.set(g, new Map());
-  cache.get(g)!.set(key, frame);
+  const frame = { key, canvas: c };
+  byContent.set(key, frame);
+  if (byContent.size > MAX_FRAMES) byContent.delete(byContent.keys().next().value!);
   return frame;
 }
 

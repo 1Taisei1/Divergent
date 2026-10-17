@@ -15,6 +15,7 @@ const HEIGHT_M: Record<SensorType, number> = { radar: 350, acoustic: 200, rf: 25
 const RING_SEGMENTS = 64; // vertices around each volume
 const STRUT_STEP = 8; // a vertical strut on every 8th ring vertex
 const OFF_SEGMENTS = 96; // ring vertices for a disabled sensor; 2 of every 4 segments are drawn, so it reads as dashed
+const OUTLINE_STEP_M = 30;
 const GROUND_LIFT_M = 8; // keeps ground edges clear of MapLibre's terrain mesh, which differs a little from our DEM samples
 const FILL_ALPHA = 24, TOP_ALPHA = 140, BASE_ALPHA = 170, STRUT_ALPHA = 55, OFF_ALPHA = 150;
 const UNFOCUSED = 0.35; // alpha multiplier for the side that is not in focus
@@ -37,17 +38,21 @@ const ground = (s: Sensor, r: number, bearing: number, at: At, up = GROUND_LIFT_
 function build(sensors: Sensor[], at: At): Geometry {
   const g: Geometry = { volumes: [], outlines: [], struts: [], off: [] };
   for (const s of sensors) {
+    // Ground strokes get a vertex every ~OUTLINE_STEP_M so long chords don't cut through ridges (the volume keeps 64).
+    const dense = Math.max(RING_SEGMENTS, Math.ceil((2 * Math.PI * s.range_m) / OUTLINE_STEP_M));
     if (!s.active) {
-      const ring = Array.from({ length: OFF_SEGMENTS }, (_, i) => ground(s, s.range_m, (2 * Math.PI * i) / OFF_SEGMENTS, at));
-      for (let i = 0; i < OFF_SEGMENTS; i += 4) g.off.push({ side: s.side, rgb: RGB.muted, path: [ring[i], ring[i + 1], ring[i + 2]], alpha: OFF_ALPHA });
+      const n = Math.max(OFF_SEGMENTS, Math.ceil(dense / 4) * 4);
+      const ring = Array.from({ length: n + 1 }, (_, i) => ground(s, s.range_m, (2 * Math.PI * i) / n, at));
+      for (let i = 0; i < n; i += 4) g.off.push({ side: s.side, rgb: RGB.muted, path: [ring[i], ring[i + 1], ring[i + 2]], alpha: OFF_ALPHA });
       continue;
     }
     const height = HEIGHT_M[s.type];
     const base = Array.from({ length: RING_SEGMENTS }, (_, i) => ground(s, s.range_m, (2 * Math.PI * i) / RING_SEGMENTS, at));
     const top = base.map((p) => raised(p, height));
+    const outline = Array.from({ length: dense }, (_, i) => ground(s, s.range_m, (2 * Math.PI * i) / dense, at));
     g.volumes.push({ side: s.side, polygon: base, height, alpha: FILL_ALPHA });
     g.outlines.push(
-      { side: s.side, rgb: RGB[s.side], path: [...base, base[0]], alpha: BASE_ALPHA },
+      { side: s.side, rgb: RGB[s.side], path: [...outline, outline[0]], alpha: BASE_ALPHA },
       { side: s.side, rgb: RGB[s.side], path: [...top, top[0]], alpha: TOP_ALPHA },
     );
     for (let i = 0; i < RING_SEGMENTS; i += STRUT_STEP) g.struts.push({ side: s.side, from: base[i], to: top[i] });

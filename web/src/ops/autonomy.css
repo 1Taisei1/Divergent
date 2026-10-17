@@ -1,0 +1,32 @@
+/* AUTONOMOUS SURVEY card. Uses the shared tokens from index.css. */
+.auto-clock { font-size: 14px; font-weight: 800; letter-spacing: 0.06em; color: var(--allied); font-variant-numeric: tabular-nums; }
+.auto-status { font-size: 28px; color: var(--text); }
+.auto-status.is-armed, .auto-status.is-mapping, .auto-status.is-planning, .auto-status.is-flying, .auto-status.is-updating { color: var(--allied); }
+.auto-status.is-returning { color: var(--origin); }
+.auto-status.is-aborted { color: var(--hazard); }
+.auto-status.is-complete { color: var(--ok); }
+
+.auto-loop { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.auto-loop span { background: var(--panel-2); padding: 4px 0; text-align: center; font-size: 12px; font-weight: 800; letter-spacing: 0.1em; color: var(--faint); transition: background 150ms var(--ease), color 150ms var(--ease); }
+.auto-loop span.on { background: var(--allied); color: var(--bg); }
+
+.ops-data dd small { font-size: 12px; font-weight: 700; color: var(--muted); }
+.ops-data .hot dd { color: var(--hazard); }
+
+.auto-op input { width: 100%; }
+.auto-op-name { color: var(--text); }
+
+.auto-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.auto-findings:empty { display: none; }
+.auto-findings li { display: flex; justify-content: space-between; gap: 10px; background: var(--panel-2); padding: 6px 10px; font-size: 13px; }
+.auto-findings b.site { color: var(--origin); }
+.auto-findings b.hostile { color: var(--hazard); }
+.auto-findings span { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.auto-log { list-style: none; margin: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12px; line-height: 1.35; color: var(--muted); max-height: 230px; overflow-y: auto; }
+.auto-log li:first-child { color: var(--text); }
+.auto-log time { color: var(--allied); font-weight: 700; margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-loop span { transition: none; }
+}

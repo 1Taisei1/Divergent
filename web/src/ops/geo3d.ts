@@ -43,13 +43,27 @@ function tileXY(lng: number, lat: number, z: number): [number, number] {
 
 // Sim meters → terrain height in meters, already exaggerated (what MapLibre draws).
 export type ElevationFn = (x: number, y: number) => number;
-export const flatElevation: ElevationFn = () => 0;
+// Typical ground height under the box (708-1076 m measured), used until / where DEM tiles are missing, so 3D objects sit
+// near the surface instead of a kilometre underground.
+const BASE_ELEV_M = 780;
+export const flatElevation: ElevationFn = () => BASE_ELEV_M * EXAGGERATION;
 
-async function decodeTile(url: string): Promise<Float32Array> {
+async function decodeTile(url: string, tries = 3): Promise<Float32Array> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await decodeOnce(url);
+    } catch (e) {
+      if (attempt >= tries) throw e;
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
+  }
+}
+
+async function decodeOnce(url: string): Promise<Float32Array> {
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.src = url;
-  await img.decode();
+  await Promise.race([img.decode(), new Promise((_, no) => setTimeout(() => no(new Error(`DEM tile timeout ${url}`)), 8000))]);
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const ctx = c.getContext('2d', { willReadFrequently: true })!;
@@ -72,18 +86,19 @@ export async function loadElevation(): Promise<ElevationFn> {
       jobs.push(decodeTile(url).then((d) => { tiles.set(`${tx}/${ty}`, d); }));
     }
   }
-  await Promise.all(jobs);
+  await Promise.allSettled(jobs); // keep whatever loaded; missing tiles fall back to the base height
+  if (!tiles.size) throw new Error('no DEM tiles loaded');
 
   const at = (gx: number, gy: number) => {
     const tx = Math.floor(gx / 256), ty = Math.floor(gy / 256);
     const d = tiles.get(`${tx}/${ty}`);
-    if (!d) return 0;
+    if (!d) return BASE_ELEV_M;
     const ix = Math.min(255, Math.max(0, gx - tx * 256)), iy = Math.min(255, Math.max(0, gy - ty * 256));
     return d[iy * 256 + ix];
   };
   return (x, y) => {
     const [fx, fy] = tileXY(...toLngLat(x, y), DEM_ZOOM);
-    const gx = fx * 256 - 0.5, gy = fy * 256 - 0.5;
+    const gx = fx * 256, gy = fy * 256; // MapLibre samples terrarium with pixel corners at integer coordinates
     const x0 = Math.floor(gx), y0 = Math.floor(gy), kx = gx - x0, ky = gy - y0;
     const top = at(x0, y0) * (1 - kx) + at(x0 + 1, y0) * kx;
     const bottom = at(x0, y0 + 1) * (1 - kx) + at(x0 + 1, y0 + 1) * kx;

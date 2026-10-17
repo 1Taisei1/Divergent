@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
 import { pad3 } from './drones';
 import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
@@ -8,8 +8,26 @@ import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './ty
 
 const TABS = ['Layers', 'Alerts', 'Explain', 'Survey', 'Metrics'] as const;
 type Tab = (typeof TABS)[number];
-// The 3D map pulls in MapLibre + deck.gl; load it on demand so the 2D view stays light.
-const OpsMap = lazy(() => import('./ops/OpsMap'));
+// The 3D map pulls in MapLibre + deck.gl; load it on demand so the 2D view stays light (preloaded right away below).
+const loadOps = () => import('./ops/OpsMap');
+const OpsMap = lazy(loadOps);
+
+// deck.gl 9 needs WebGL2; without it, start in the 2D view.
+const hasWebGL2 = (() => {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return !!gl;
+  } catch { return false; }
+})();
+
+// If the 3D view fails (no WebGL, chunk failed to load, render error), fall back to 2D instead of a blank page.
+class OpsBoundary extends Component<{ onFail: (e: unknown) => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(e: unknown) { this.props.onFail(e); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
 
 export default function App() {
   const [list, setList] = useState<ScenarioListItem[]>([]);
@@ -18,7 +36,7 @@ export default function App() {
   const [err, setErr] = useState('');
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [tab, setTab] = useState<Tab>('Layers');
+  const [tab, setTab] = useState<Tab>(hasWebGL2 ? 'Alerts' : 'Layers'); // Layers toggles only drive the 2D map
   const [layers, setLayers] = useState<Layers>(ALL_LAYERS);
   const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
   const [proposed, setProposed] = useState<{ route: ReconRoute; t: number } | null>(null);
@@ -26,10 +44,11 @@ export default function App() {
   const [moveSensor, setMoveSensor] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState<Source>(dataSource());
-  const [view, setView] = useState<'ops' | 'classic'>('ops');
+  const [view, setView] = useState<'ops' | 'classic'>(hasWebGL2 ? 'ops' : 'classic');
 
   useEffect(() => {
     listScenarios().then(setList).catch((e) => setErr(String(e)));
+    if (hasWebGL2) loadOps().catch(() => undefined); // fetch the 3D chunk while the scenario downloads
   }, []);
 
   useEffect(() => {
@@ -78,6 +97,8 @@ export default function App() {
   }, [scenario]);
 
   const alertMarks = useMemo(() => scenario?.frames.filter((f) => f.alerts.length).map((f) => f.t) ?? [], [scenario]);
+  const alertEvents = useMemo(() => scenario?.frames.flatMap((f) => f.alerts.map((a) => ({ t: f.t, kind: a.kind }))), [scenario]);
+  const shownView = alt ? 'classic' : view; // a what-if always opens in the 2D split
   const alertCount = scenario ? alertsUpTo(scenario, t).length : 0;
   const reconRoute = scenario?.recon_route && scenario.recon_route.status !== 'proposed' ? scenario.recon_route : proposed?.route ?? null;
   const frame = scenario ? frameAt(scenario, t) : undefined;
@@ -86,6 +107,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="classification" role="note">UNCLASSIFIED // EXERCISE // SIMULATED DATA</div>
       <header>
         <h1 className="brand"><span className="brand-mark">Divergent</span><span className="brand-sub">Drone origin picture</span></h1>
         <label className="scenario">
@@ -98,8 +120,10 @@ export default function App() {
           {source === 'api' ? 'Live API' : source === 'fallback' ? 'API unreachable · fixture' : 'Fixture'}
         </span>
         <div className="view-switch" role="group" aria-label="Map view">
-          <button className={view === 'ops' ? 'on' : ''} aria-pressed={view === 'ops'} onClick={() => setView('ops')}>3D ops</button>
-          <button className={view === 'classic' ? 'on' : ''} aria-pressed={view === 'classic'} onClick={() => setView('classic')}>2D classic</button>
+          <button className={shownView === 'ops' ? 'on' : ''} aria-pressed={shownView === 'ops'} disabled={!hasWebGL2 || !!alt}
+            title={!hasWebGL2 ? 'This device has no WebGL2' : alt ? 'Close the what-if to return to 3D' : undefined}
+            onClick={() => setView('ops')}>3D ops</button>
+          <button className={shownView === 'classic' ? 'on' : ''} aria-pressed={shownView === 'classic'} onClick={() => setView('classic')}>2D classic</button>
         </div>
         {busy && <span className="busy">{busy}</span>}
         {err && <span className="error inline" title={err}>{err}</span>}
@@ -117,10 +141,13 @@ export default function App() {
 
       <main>
         <section className={`maps ${alt ? 'split' : ''}`}>
-          {scenario && view === 'ops' && !alt ? (
-            <Suspense fallback={<div className="loading">Loading 3D terrain…</div>}>
-              <OpsMap scenario={scenario} t={t} playing={playing} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack} reconRoute={reconRoute} />
-            </Suspense>
+          {scenario && shownView === 'ops' ? (
+            <OpsBoundary onFail={(e) => { console.error(e); setView('classic'); setErr('3D view unavailable on this device; showing 2D'); }}>
+              <Suspense fallback={<div className="loading">Loading 3D terrain…</div>}>
+                <OpsMap scenario={scenario} t={t} playing={playing} onJump={(x) => { setPlaying(false); setT(x); }}
+                  selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack} reconRoute={reconRoute} />
+              </Suspense>
+            </OpsBoundary>
           ) : scenario ? (
             <>
               <MapView scenario={scenario} t={t} playing={playing} layers={layers} selectedTrack={selectedTrack} onSelectTrack={setSelectedTrack}
@@ -147,7 +174,10 @@ export default function App() {
               </button>
             ))}
           </nav>
-          {scenario && tab === 'Layers' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
+          {scenario && tab === 'Layers' && shownView === 'ops' && (
+            <div className="panel"><p className="hint">Layer toggles drive the 2D classic map. In the 3D view, each map tab shows one analysis layer; switch to 2D classic to toggle layers individually.</p></div>
+          )}
+          {scenario && tab === 'Layers' && shownView === 'classic' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
           {scenario && tab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} />}
           {scenario && tab === 'Explain' && <ExplainTab scenario={scenario} t={t} />}
           {scenario && tab === 'Survey' && (
@@ -162,7 +192,8 @@ export default function App() {
         </aside>
       </main>
 
-      <Timeline t={t} max={maxT} playing={playing} onT={(x) => setT(x)} onPlay={onPlay} marks={alertMarks} events={scenario?.frames.flatMap((f) => f.alerts.map((a) => ({ t: f.t, kind: a.kind })))} />
+      <Timeline t={t} max={maxT} playing={playing} onT={(x) => setT(x)} onPlay={onPlay} marks={alertMarks} events={alertEvents} />
+      <div className="classification" role="note">UNCLASSIFIED // EXERCISE // SIMULATED DATA</div>
     </div>
   );
 }

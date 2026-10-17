@@ -6,6 +6,7 @@ import { ColumnLayer, IconLayer, LineLayer, PathLayer, ScatterplotLayer, TextLay
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import maplibregl, { type GeoJSONSource, type Map as MLMap, type MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import './ops.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { headingDeg, pad3, speedMs, STEP_MS } from '../drones';
 import { MAP_SIZE, pct } from '../geo';
@@ -16,15 +17,25 @@ import {
   IMAGERY_URL, loadElevation, toLngLat, type ElevationFn,
 } from './geo3d';
 import { coverageLayers } from './coverage';
-import { blend, confidenceGrid, hasValues, heatFrame, LEGEND_SWATCHES, type HeatFrame } from './heat';
+import { toMGRS } from './mgrs';
+import { detectionField, enemyOriginField, hostileActivityField, routeThreatField, safeLaunchField } from './analytics';
+import { heatFrame, LEGEND_SWATCHES, lift, type HeatFrame } from './heat';
 import { addHeatLayers, setHeat } from './heatTiles';
 import { planRoutes } from './route';
+import AutonomyPanel from './AutonomyPanel';
+import {
+  abortMission, armMission, DEFAULT_MISSION, initMission, isActive, missionLayers, stepMission, uncertaintyGrid,
+  type MissionContext, type MissionState,
+} from './autonomy';
+import ProvenanceView from './Provenance';
 
-export type OpsMode = 'enemy' | 'launch' | 'route';
-const MODES: { id: OpsMode; label: string; red: string; low: string; high: string }[] = [
-  { id: 'enemy', label: 'Enemy origins', red: 'Red = most confident enemy launch origin', low: 'Unlikely', high: 'Confident' },
-  { id: 'launch', label: 'Safe launch', red: 'Red = safest place for us to launch from', low: 'Exposed', high: 'Safest' },
-  { id: 'route', label: 'Route plan', red: 'Red = exposed to enemy sensors or launches', low: 'Clear', high: 'Exposed' },
+export type OpsMode = 'enemy' | 'launch' | 'route' | 'survey' | 'provenance';
+const MODES: { id: OpsMode; code: string; label: string; red: string; low: string; high: string }[] = [
+  { id: 'enemy', code: '01', label: 'Enemy origins', red: 'Red = most likely enemy launch area (model estimate)', low: 'Unlikely', high: 'Likely' },
+  { id: 'launch', code: '02', label: 'Safe launch', red: 'Red = safest place for us to launch from (model estimate)', low: 'Exposed', high: 'Safest' },
+  { id: 'route', code: '03', label: 'Route plan', red: 'Red = threat: enemy detection, activity, launch areas', low: 'Clear', high: 'Threat' },
+  { id: 'survey', code: '04', label: 'Auto survey', red: 'Red = unsurveyed, high-value ground', low: 'Mapped', high: 'Unknown' },
+  { id: 'provenance', code: '05', label: 'Provenance', red: '', low: '', high: '' },
 ];
 
 type RGBA = [number, number, number, number];
@@ -80,7 +91,25 @@ const framePadding = (map: MLMap) => {
   return w < 700 ? { top: 60, bottom: 160, left: 20, right: 70 } : { top: 70, bottom: 50, left: Math.min(330, Math.round(w * 0.36)), right: 100 };
 };
 
-type Drone = { id: string; kind: Kind; x: number; y: number; hdg: number; spd: number; alt: number; track: Track };
+// x/y/alt at this second, px/py/palt at the previous one (the animation loop glides between them).
+type Drone = { id: string; kind: Kind; x: number; y: number; px: number; py: number; hdg: number; spd: number; alt: number; palt: number; track: Track };
+const DET_WINDOW_S = 30;
+const HEAT_STEP_S = 2;
+// Autonomous survey clock: 10 ticks per real second; decision phases run at 2x so MAP / PLAN / UPDATE stay readable,
+// transit runs at 10x so a whole sortie fits in a couple of minutes of demo.
+const MISSION_TICK_S = 0.1, MISSION_RATE_DECIDE = 2, MISSION_RATE_FLY = 10;
+const noop = () => undefined;
+
+// Resample a polyline every stepM metres so 3D paths follow the terrain instead of cutting through ridges.
+function densify(pts: Point[], stepM = 150): Point[] {
+  const out: Point[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / stepM));
+    for (let k = 0; k < n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  if (pts.length) out.push(pts[pts.length - 1]);
+  return out;
+}
 
 type Props = {
   scenario: Scenario;
@@ -89,6 +118,7 @@ type Props = {
   selectedTrack: string | null;
   onSelectTrack: (id: string | null) => void;
   reconRoute: ReconRoute | null;
+  onJump?: (t: number) => void;
 };
 
 export default function OpsMap(p: Props) {
@@ -106,10 +136,16 @@ export default function OpsMap(p: Props) {
   const [goal, setGoal] = useState<Point | null>(null);
   const [pickStart, setPickStart] = useState(false);
   const [activeRoute, setActiveRoute] = useState(0);
-  const [k, setK] = useState(1); // glide between the previous and current simulated second
   const [cardOpen, setCardOpen] = useState(() => window.innerWidth >= 700);
+  const [mission, setMission] = useState<MissionState>(() => initMission(DEFAULT_MISSION, null, null));
+  const camOut = useRef<HTMLOutputElement>(null);
+  const card = useRef<HTMLElement>(null);
+  const sent = useRef(new Map<string, string>()); // last GeoJSON sent per source
+  const tChangedAt = useRef(0); // performance.now() when t last changed, for the glide
 
   const frame = frameAt(s, t);
+  // Heat fields are recomputed at most every HEAT_STEP_S simulated seconds while playing (every second when paused).
+  const heatT = p.playing ? t - (t % HEAT_STEP_S) : t;
   const prev = t > 0 ? frameAt(s, t - 1) : undefined;
 
   // Latest values for map event handlers registered once.
@@ -136,6 +172,7 @@ export default function OpsMap(p: Props) {
       bounds: BOX_BOUNDS,
       fitBoundsOptions: { padding: 40 },
       maxPitch: 85,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5), // full retina terrain is the biggest GPU cost on laptops
       attributionControl: { compact: true },
     });
     mapRef.current = map;
@@ -195,20 +232,24 @@ export default function OpsMap(p: Props) {
       setReady(true);
     });
 
-    map.on('rotate', () => setBearing(map.getBearing()));
-    map.on('pitch', () => setPitch(map.getPitch()));
+    // Camera readout updates imperatively; React only hears about the end of a gesture.
+    const readout = () => {
+      if (camOut.current) camOut.current.textContent = `P${pad3(map.getPitch())} B${pad3((map.getBearing() + 360) % 360)}`;
+    };
+    map.on('move', readout);
+    map.on('moveend', () => { setBearing(map.getBearing()); setPitch(map.getPitch()); });
     map.on('mousemove', (e: MapMouseEvent) => {
       if (!cursor.current) return;
       const { lng, lat } = e.lngLat;
       const sp = fromLngLat(lng, lat);
       const h = live.current.elev(sp.x, sp.y) / EXAGGERATION;
       const inside = sp.x >= 0 && sp.y >= 0 && sp.x <= MAP_SIZE && sp.y <= MAP_SIZE;
-      cursor.current.textContent = `${lat.toFixed(4)}°N ${Math.abs(lng).toFixed(4)}°W  ELEV ${Math.round(h)} M${inside ? `  SIM ${String(Math.round(sp.x)).padStart(5, '0')} ${String(Math.round(sp.y)).padStart(5, '0')}` : ''}`;
+      cursor.current.textContent = `MGRS ${toMGRS(lat, lng)}  ELEV ${Math.round(h)} M${inside ? `  SIM ${String(Math.round(sp.x)).padStart(5, '0')} ${String(Math.round(sp.y)).padStart(5, '0')}` : ''}`;
     });
     map.on('mouseout', () => { if (cursor.current) cursor.current.textContent = 'CURSOR OFF MAP'; });
     map.on('click', (e: MapMouseEvent) => {
       const hit = overlayRef.current?.pickObject({ x: e.point.x, y: e.point.y, radius: 6 });
-      if (hit?.object) return;
+      if (hit?.object && hit.layer?.id === 'drones') return; // drones handle their own clicks; towers don't block routing
       const L = live.current;
       if (L.mode === 'route') {
         const pt = clampToBox(fromLngLat(e.lngLat.lng, e.lngLat.lat));
@@ -221,7 +262,7 @@ export default function OpsMap(p: Props) {
 
     const ro = new ResizeObserver(() => map.resize());
     ro.observe(box.current);
-    return () => { ro.disconnect(); map.remove(); mapRef.current = null; overlayRef.current = null; };
+    return () => { ro.disconnect(); map.remove(); mapRef.current = null; overlayRef.current = null; setReady(false); sent.current.clear(); };
   }, []);
 
   useEffect(() => {
@@ -230,83 +271,83 @@ export default function OpsMap(p: Props) {
     return () => { alive = false; };
   }, []);
 
-  // Glide drones from last second's position to this second's while playing (4x: one second per STEP_MS).
-  useEffect(() => {
-    if (!p.playing || reduceMotion()) { setK(1); return; }
-    setK(0);
-    const t0 = performance.now();
-    let raf = 0;
-    const step = (now: number) => {
-      const v = Math.min(1, (now - t0) / STEP_MS);
-      setK(v);
-      if (v < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [t, p.playing]);
-
-  // Clock for the radar sweeps (about 30 fps; paused for reduced motion).
-  const [sweepMs, setSweepMs] = useState(0);
-  useEffect(() => {
-    if (reduceMotion()) return;
-    let raf = 0, last = 0;
-    const tick = (now: number) => {
-      if (now - last > 33) { last = now; setSweepMs(now); }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+  useEffect(() => { tChangedAt.current = performance.now(); }, [t]);
   const atTerrain = useCallback((x: number, y: number, up = 0): [number, number, number] => [...toLngLat(x, y), elev(x, y) + up], [elev]);
-  const coverage = useMemo(
-    () => coverageLayers(s.sensors, atTerrain, { focus: mode === 'enemy' ? 'allied' : 'enemy', timeMs: sweepMs }),
-    [s.sensors, atTerrain, mode, sweepMs],
-  );
 
   // ---- derived data ----
-  // Route threat = enemy sensor exposure + 0.6 × where the enemy is expected to launch next.
-  const threat: Grid | null = useMemo(() => {
-    if (!frame) return null;
-    const exposure = frame.exposure_grid, forecast = frame.forecast_heatmap;
-    if (!hasValues(exposure) && !hasValues(forecast)) return null;
-    const zeros: Grid = { cell_m: 100, width: 100, height: 100, values: Array.from({ length: 100 }, () => new Array<number>(100).fill(0)) };
-    return blend(hasValues(exposure) ? exposure : zeros, forecast, 0.6);
-  }, [frame]);
+  // Inference fields (analytics.ts): computed from fragmented detections, tracks, sensor geometry and terrain LOS.
+  // Detection fields are memoized inside analytics (sensors + terrain are static); the rest refresh every HEAT_STEP_S.
+  const terrain = elev === flatElevation ? null : elev;
+  const missionOn = isActive(mission.phase);
+  const surveyLive = mode === 'survey' || missionOn; // an armed sortie keeps reading live intel from any tab
+  const needs = { activity: mode === 'launch' || mode === 'route' || surveyLive, origin: mode === 'enemy' || mode === 'route' || surveyLive };
+  const alliedDetect = useMemo(() => detectionField(s.sensors, 'allied', terrain), [s.sensors, terrain]);
+  const enemyDetect = useMemo(() => detectionField(s.sensors, 'enemy', terrain), [s.sensors, terrain]);
+  const activity = useMemo(() => (needs.activity ? hostileActivityField(s, heatT) : null), [s, heatT, needs.activity]);
+  const originField = useMemo(() => (needs.origin ? enemyOriginField(s, heatT, alliedDetect) : null), [s, heatT, alliedDetect, needs.origin]);
+  const launchField = useMemo(() => (mode === 'launch' && activity ? safeLaunchField(s, heatT, enemyDetect, activity, terrain) : null), [mode, s, heatT, enemyDetect, activity, terrain]);
+  const wantThreat = mode === 'route' || surveyLive;
+  const threat: Grid | null = useMemo(() => (wantThreat && activity && originField ? routeThreatField(enemyDetect, activity, originField) : null), [wantThreat, enemyDetect, activity, originField]);
+
+  // ---- autonomous survey (tab 04) ----
+  // Before arming, preview the value map from the live intel; once armed the mission owns its own state and clock.
+  const idlePreview = useMemo(() => (mode === 'survey' && mission.phase === 'idle' ? initMission(DEFAULT_MISSION, originField, threat) : null), [mode, mission.phase, originField, threat]);
+  const shownMission = idlePreview ?? mission;
+  const missionCtx = useRef<MissionContext>({ prior: null, threat: null, origins: [], tracks: [] });
+  missionCtx.current = { prior: originField, threat, origins: frame?.origins ?? [], tracks: frame?.tracks ?? [] };
+  useEffect(() => {
+    if (!missionOn) return;
+    const id = window.setInterval(() => setMission((m) => {
+      const rate = m.phase === 'flying' || m.phase === 'returning' ? MISSION_RATE_FLY : MISSION_RATE_DECIDE;
+      return stepMission(m, rate * MISSION_TICK_S, DEFAULT_MISSION, missionCtx.current);
+    }), MISSION_TICK_S * 1000);
+    return () => window.clearInterval(id);
+  }, [missionOn]);
+  useEffect(() => { if (card.current) card.current.scrollTop = 0; }, [mission.phase]);
+  const armSurvey = (operator: string) => setMission(armMission(initMission(DEFAULT_MISSION, originField, threat), operator));
   const routes = useMemo(() => (goal && threat ? planRoutes(threat, start, goal) : []), [threat, start, goal]);
-  const dets = useMemo(() => s.frames.filter((f) => f.t <= t).flatMap((f) => f.detections), [s, t]);
+  // Only the last DET_WINDOW_S seconds of detections: enough to show the fragments, bounded cost on the GPU.
+  const dets = useMemo(() => s.frames.slice(Math.max(0, t - DET_WINDOW_S), t + 1).flatMap((f) => f.detections), [s, t]);
   const firstSeen = useMemo(() => {
     const m = new Map<string, number>();
     for (const f of s.frames) for (const d of f.detections) if (d.truth_drone_id && !m.has(d.truth_drone_id) && !d.clutter) m.set(d.truth_drone_id, d.t);
     return m;
   }, [s]);
-  const enemyHeat = useMemo(() => (frame?.origins.length ? confidenceGrid(frame.origins) : null), [frame]);
 
+  // Drone state at this second; positions between seconds are interpolated in the animation loop (glideDrones).
   const drones: Drone[] = useMemo(() => {
     if (!frame) return [];
     const before = new Map(prev?.tracks.map((x) => [x.id, x.current]) ?? []);
     return frame.tracks.map((tr) => {
       const lost = tr.status === 'lost';
       const pv = before.get(tr.id);
-      const g = !lost && pv ? k : 1;
-      const x = pv ? pv.x + (tr.current.x - pv.x) * g : tr.current.x;
-      const y = pv ? pv.y + (tr.current.y - pv.y) * g : tr.current.y;
       const t0 = tr.points[0]?.t ?? t;
-      const tNow = lost ? (tr.points[tr.points.length - 1]?.t ?? t) : t - 1 + k;
-      return { id: tr.id, kind: lost ? 'lost' : 'hostile', x, y, hdg: headingDeg(tr.current.vx, tr.current.vy), spd: speedMs(tr.current.vx, tr.current.vy), alt: agl(tNow, t0), track: tr };
+      const tNow = lost ? (tr.points[tr.points.length - 1]?.t ?? t) : t;
+      return {
+        id: tr.id, kind: lost ? 'lost' : 'hostile', x: tr.current.x, y: tr.current.y, px: !lost && pv ? pv.x : tr.current.x, py: !lost && pv ? pv.y : tr.current.y,
+        hdg: headingDeg(tr.current.vx, tr.current.vy), spd: speedMs(tr.current.vx, tr.current.vy), alt: agl(tNow, t0), palt: lost ? agl(tNow, t0) : agl(t - 1, t0), track: tr,
+      };
     });
-  }, [frame, prev, k, t]);
+  }, [frame, prev, t]);
 
   // ---- MapLibre: heat + draped vectors per tab ----
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !frame) return;
     let heat: HeatFrame | null = null;
-    if (mode === 'enemy' && enemyHeat) heat = heatFrame(enemyHeat, 1, 320, 1.5);
-    if (mode === 'launch' && hasValues(s.launch_site_grid)) heat = heatFrame(s.launch_site_grid);
+    if (mode === 'enemy' && originField) heat = heatFrame(lift(originField, 0.55)); // show the back-projected cones, not just the peaks
+    if (mode === 'launch' && launchField) heat = heatFrame(lift(launchField, 0.5)); // rank the whole box, not only the top sites
     if (mode === 'route' && threat) heat = heatFrame(threat);
+    if (mode === 'survey') heat = heatFrame(uncertaintyGrid(shownMission));
     setHeat(map, heat?.canvas ?? null, heat?.key ?? '', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
 
-    const set = (id: string, features: GeoJSON.Feature[]) => (map.getSource(id) as GeoJSONSource).setData(fc(features));
+    // setData re-tiles in a worker, so only send sources whose contents actually changed.
+    const set = (id: string, features: GeoJSON.Feature[]) => {
+      const key = JSON.stringify(features);
+      if (sent.current.get(id) === key) return;
+      sent.current.set(id, key);
+      (map.getSource(id) as GeoJSONSource).setData(fc(features));
+    };
     set('rings', []); // sensor coverage is drawn in 3D by coverage.ts
     set('origins', mode === 'enemy' ? frame.origins.map((o) => poly([circleRing(o.peak.x, o.peak.y, o.radius_m, 48)])) : []);
     set('teams', mode === 'enemy' ? frame.launch_teams.filter((lt) => lt.origin_history.length > 1).map((lt) => line(lt.origin_history.map((h) => toLngLat(h.x, h.y)))) : []);
@@ -314,14 +355,14 @@ export default function OpsMap(p: Props) {
     const routeLines = routes.map((r, i) => line(r.points.map((q) => toLngLat(q.x, q.y)), { active: i === activeRoute }));
     set('routes', mode === 'route' ? [...routeLines.filter((f) => !f.properties?.active), ...routeLines.filter((f) => f.properties?.active)] : []);
     const rr = p.reconRoute;
-    set('recon', rr && mode !== 'launch' ? [line(rr.waypoints.map((q) => toLngLat(q.x, q.y))), ...(frame.recon ? [poly([circleRing(frame.recon.x, frame.recon.y, 1000, 48)])] : [])] : []);
-  }, [ready, frame, mode, s, enemyHeat, threat, routes, activeRoute, p.reconRoute]);
+    set('recon', rr && (mode === 'enemy' || mode === 'route') ? [line(rr.waypoints.map((q) => toLngLat(q.x, q.y))), ...(frame.recon ? [poly([circleRing(frame.recon.x, frame.recon.y, 1000, 48)])] : [])] : []);
+  }, [ready, frame, mode, s, originField, launchField, threat, routes, activeRoute, p.reconRoute, shownMission]);
 
   // ---- deck.gl: 3D objects ----
   const layers = useMemo(() => {
     if (!frame) return [];
     const at = (x: number, y: number, up = 0): [number, number, number] => [...toLngLat(x, y), elev(x, y) + up];
-    const sel = p.selectedTrack;
+    const sel = frame.tracks.some((x) => x.id === p.selectedTrack) ? p.selectedTrack : null; // stale selection dims nothing
     const text = (id: string, data: unknown[], extra: Record<string, unknown>) => new TextLayer({
       id, data, fontFamily: FONT, fontWeight: 700, characterSet: 'auto', sizeUnits: 'pixels', getSize: 13,
       background: true, getBackgroundColor: [18, 17, 16, 220], backgroundPadding: [6, 3], billboard: true,
@@ -352,17 +393,7 @@ export default function OpsMap(p: Props) {
         id: 'flight-paths', data: drones, widthUnits: 'pixels', billboard: true, capRounded: true, jointRounded: true,
         getPath: (d) => [...d.track.points.map((q) => at(q.x, q.y, agl(q.t, d.track.points[0].t))), at(d.x, d.y, d.alt)],
         getWidth: (d) => (d.id === sel ? 5 : 3), getColor: (d) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, dim(d.id)),
-        updateTriggers: { getPath: [elev, k], getColor: sel, getWidth: sel },
-      }));
-      out.push(new LineLayer<Drone>({
-        id: 'drop-lines', data: drones, widthUnits: 'pixels', getWidth: 1.5,
-        getSourcePosition: (d) => at(d.x, d.y, d.alt), getTargetPosition: (d) => at(d.x, d.y),
-        getColor: (d) => rgba(RGB.friendly, sel && sel !== d.id ? 40 : 150), updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k], getColor: sel },
-      }));
-      out.push(new ScatterplotLayer<Drone>({
-        id: 'ground-marks', data: drones, radiusUnits: 'meters', getRadius: 40, stroked: true, filled: true, lineWidthUnits: 'pixels', getLineWidth: 1.5,
-        getPosition: (d) => at(d.x, d.y, 6), getFillColor: [0, 0, 0, 110], getLineColor: (d) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, 160),
-        updateTriggers: { getPosition: [elev, k] },
+        updateTriggers: { getPath: elev, getColor: sel, getWidth: sel },
       }));
       out.push(new LineLayer({
         id: 'origin-stalks', data: frame.origins, widthUnits: 'pixels', getWidth: 2.5, getColor: rgba(RGB.origin),
@@ -377,22 +408,25 @@ export default function OpsMap(p: Props) {
       out.push(text('site-labels-enemy', sites, {
         getPosition: (q: Point) => at(q.x, q.y, 300), getText: (q: { label: string }) => q.label, getColor: rgba(RGB.origin), updateTriggers: { getPosition: elev },
       }));
+      // Survey-confirmed launch sites (recon fusion): a white stalk and a tight ring at the confirmed position.
+      const confirmed = frame.confirmed_sites ?? [];
+      out.push(new LineLayer({
+        id: 'confirmed-stalks', data: confirmed, widthUnits: 'pixels', getWidth: 3, getColor: rgba(RGB.friendly),
+        getSourcePosition: (c: Point) => at(c.x, c.y), getTargetPosition: (c: Point) => at(c.x, c.y, 420), updateTriggers: { getSourcePosition: elev, getTargetPosition: elev },
+      }));
+      out.push(new ScatterplotLayer({
+        id: 'confirmed-rings', data: confirmed, radiusUnits: 'meters', getRadius: (c: { radius_m: number }) => Math.max(60, c.radius_m),
+        stroked: true, filled: false, lineWidthUnits: 'pixels', getLineWidth: 2.5, getLineColor: rgba(RGB.friendly),
+        getPosition: (c: Point) => at(c.x, c.y, 10), updateTriggers: { getPosition: elev },
+      }));
+      out.push(text('confirmed-labels', confirmed, {
+        getPosition: (c: Point) => at(c.x, c.y, 470), getColor: rgba(RGB.friendly),
+        getText: (c: { team_id: string; radius_m: number }) => `${c.team_id} SITE CONFIRMED ±${Math.round(c.radius_m)}M`, updateTriggers: { getPosition: elev },
+      }));
       const selO = frame.origins.filter((o) => o.track_id === sel);
       out.push(text('origin-labels', selO, {
         getPosition: (o: { peak: Point }) => at(o.peak.x, o.peak.y, 160), getColor: rgba(RGB.friendly), getPixelOffset: [0, 22],
         getText: (o: { track_id: string; confidence: number; radius_m: number }) => `${o.track_id} ORIGIN ${pct(o.confidence)} ±${Math.round(o.radius_m)}M`, updateTriggers: { getPosition: elev },
-      }));
-      out.push(new IconLayer<Drone>({
-        id: 'drones', data: drones, pickable: true, billboard: true, sizeUnits: 'pixels',
-        getIcon: (d) => ICONS[d.kind], getSize: (d) => (d.id === sel ? 60 : 46), getPosition: (d) => at(d.x, d.y, d.alt),
-        getAngle: (d) => (d.kind === 'lost' ? 0 : bearing - d.hdg), getColor: (d) => [255, 255, 255, sel && sel !== d.id ? 90 : 255],
-        updateTriggers: { getPosition: [elev, k], getAngle: bearing, getSize: sel, getColor: sel },
-      }));
-      out.push(text('drone-labels', drones, {
-        getPosition: (d: Drone) => at(d.x, d.y, d.alt), getPixelOffset: [34, 0], getTextAnchor: 'start',
-        getText: (d: Drone) => (d.kind === 'lost' ? `${d.id} LOST` : d.id === sel ? `${d.id} ${Math.round(d.spd)}M/S ${Math.round(d.alt)}M` : d.id),
-        getColor: (d: Drone) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, sel && sel !== d.id ? 90 : 255),
-        updateTriggers: { getPosition: [elev, k], getColor: sel },
       }));
     }
 
@@ -408,7 +442,7 @@ export default function OpsMap(p: Props) {
       }));
     }
 
-    if (mode !== 'enemy') {
+    if (mode === 'launch' || mode === 'route') {
       const pins = mode === 'route'
         ? [{ ...start, label: start === HOME_BASE ? 'START · HOME BASE' : 'START', c: RGB.friendly }, ...(goal ? [{ ...goal, label: 'DESTINATION', c: RGB.origin }] : [])]
         : [{ ...HOME_BASE, label: 'HOME BASE', c: RGB.friendly }];
@@ -425,50 +459,120 @@ export default function OpsMap(p: Props) {
     if (mode === 'route' && routes.length) {
       out.push(text('route-labels', routes.map((r, i) => ({ r, i, mid: r.points[Math.floor(r.points.length / 2)] })), {
         getPosition: (o: { mid: Point }) => at(o.mid.x, o.mid.y, 140),
-        getText: (o: { r: { id: string; length_m: number; risk: number } }) => `ROUTE ${o.r.id} · ${km(o.r.length_m)} · RISK ${pct(o.r.risk)}`,
+        getText: (o: { r: { id: string; length_m: number; exposure_m: number; max_threat: number } }) => `ROUTE ${o.r.id} · ${km(o.r.length_m)} · EXPOSED ${km(o.r.exposure_m)} · PEAK ${pct(o.r.max_threat)}`,
         getColor: (o: { i: number }) => (o.i === activeRoute ? rgba(RGB.friendly) : rgba(RGB.allied)), updateTriggers: { getPosition: elev, getColor: activeRoute },
       }));
     }
 
+    if (frame.recon && (mode === 'enemy' || mode === 'route') && p.reconRoute) {
+      out.push(new PathLayer({
+        id: 'survey-path', data: [p.reconRoute], widthUnits: 'pixels', getWidth: 2, billboard: true,
+        getPath: (rr: ReconRoute) => densify(rr.waypoints).map((q) => at(q.x, q.y, SURVEY_AGL)), getColor: rgba(RGB.friendly, 170), updateTriggers: { getPath: elev },
+      }));
+    }
+    return out;
+  }, [frame, s, elev, mode, drones, dets, firstSeen, p.selectedTrack, p.reconRoute, start, goal, routes, activeRoute]);
+
+  // Per-frame layers: things that glide between simulated seconds or turn with the camera. Built inside the animation
+  // loop below (no React re-render per frame); k is 0..1 through the current simulated second.
+  const dynamic = useRef<(k: number, bearing: number, pitch: number) => Layer[]>(() => []);
+  dynamic.current = (k, brg, pit) => {
+    // On-screen icon angle: heading relative to the camera, foreshortened by the tilt so the nose follows the path.
+    const screen = (hdg: number) => { const a = ((hdg - brg) * Math.PI) / 180; return -(Math.atan2(Math.sin(a), Math.cos(a) * Math.cos((pit * Math.PI) / 180)) * 180) / Math.PI; };
+    if (!frame) return [];
+    const at = atTerrain;
+    const sel = frame.tracks.some((x) => x.id === p.selectedTrack) ? p.selectedTrack : null;
+    const out: Layer[] = [];
+    const label = (id: string, data: unknown[], extra: Record<string, unknown>) => new TextLayer({
+      id, data, fontFamily: FONT, fontWeight: 700, characterSet: 'auto', sizeUnits: 'pixels', getSize: 13,
+      background: true, getBackgroundColor: [18, 17, 16, 220], backgroundPadding: [6, 3], billboard: true,
+      getTextAnchor: 'start', getAlignmentBaseline: 'center', getPixelOffset: [34, 0], ...extra,
+    });
+    if (mode === 'enemy') {
+      const g = drones.map((d) => ({ ...d, x: d.px + (d.x - d.px) * k, y: d.py + (d.y - d.py) * k, alt: d.palt + (d.alt - d.palt) * k }));
+      const dim = (id: string) => sel && sel !== id;
+      out.push(new LineLayer<Drone>({
+        id: 'drop-lines', data: g, widthUnits: 'pixels', getWidth: 1.5,
+        getSourcePosition: (d) => at(d.x, d.y, d.alt), getTargetPosition: (d) => at(d.x, d.y), getColor: (d) => rgba(RGB.friendly, dim(d.id) ? 40 : 150),
+        updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k], getColor: sel },
+      }));
+      out.push(new ScatterplotLayer<Drone>({
+        id: 'ground-marks', data: g, radiusUnits: 'meters', getRadius: 40, stroked: true, filled: true, lineWidthUnits: 'pixels', getLineWidth: 1.5,
+        getPosition: (d) => at(d.x, d.y, 6), getFillColor: [0, 0, 0, 110], getLineColor: (d) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, 160),
+        updateTriggers: { getPosition: [elev, k] },
+      }));
+      out.push(new IconLayer<Drone>({
+        id: 'drones', data: g, pickable: true, billboard: true, sizeUnits: 'pixels',
+        getIcon: (d) => ICONS[d.kind], getSize: (d) => (d.id === sel ? 60 : 46), getPosition: (d) => at(d.x, d.y, d.alt),
+        getAngle: (d) => (d.kind === 'lost' ? 0 : screen(d.hdg)), getColor: (d) => [255, 255, 255, dim(d.id) ? 90 : 255],
+        updateTriggers: { getPosition: [elev, k], getAngle: [brg, pit], getSize: sel, getColor: sel },
+      }));
+      out.push(label('drone-labels', g, {
+        getPosition: (d: Drone) => at(d.x, d.y, d.alt),
+        getText: (d: Drone) => (d.kind === 'lost' ? `${d.id} LOST` : d.id === sel ? `${d.id} ${Math.round(d.spd)}M/S ${Math.round(d.alt)}M` : d.id),
+        getColor: (d: Drone) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, dim(d.id) ? 90 : 255),
+        updateTriggers: { getPosition: [elev, k], getColor: sel, getText: sel },
+      }));
+    }
     const r = frame.recon;
-    if (r && mode !== 'launch') {
+    if (r && (mode === 'enemy' || mode === 'route')) {
       const before = prev?.recon?.route_id === r.route_id ? prev.recon : null;
-      const g = before && p.playing ? k : 1;
-      const rx = before ? before.x + (r.x - before.x) * g : r.x, ry = before ? before.y + (r.y - before.y) * g : r.y;
-      const hdg = before ? headingDeg(r.x - before.x, r.y - before.y) : 0;
-      const d = [{ id: r.route_id, kind: 'friendly' as Kind, x: rx, y: ry, hdg, alt: SURVEY_AGL, status: r.status, risk: r.risk_now }];
-      if (p.reconRoute) {
-        out.push(new PathLayer({
-          id: 'survey-path', data: [p.reconRoute], widthUnits: 'pixels', getWidth: 2, billboard: true,
-          getPath: (rr: ReconRoute) => rr.waypoints.map((q) => at(q.x, q.y, SURVEY_AGL)), getColor: rgba(RGB.friendly, 170), updateTriggers: { getPath: elev },
-        }));
-      }
+      const rx = before ? before.x + (r.x - before.x) * k : r.x, ry = before ? before.y + (r.y - before.y) * k : r.y;
+      const d = [{ id: r.route_id, x: rx, y: ry, hdg: before ? headingDeg(r.x - before.x, r.y - before.y) : 0, status: r.status, risk: r.risk_now }];
       out.push(new LineLayer({
         id: 'survey-drop', data: d, widthUnits: 'pixels', getWidth: 1.5, getColor: rgba(RGB.allied, 170),
         getSourcePosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getTargetPosition: (q: Point) => at(q.x, q.y), updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k] },
       }));
       out.push(new IconLayer({
         id: 'survey-drone', data: d, billboard: true, sizeUnits: 'pixels', getIcon: () => ICONS.friendly, getSize: 52,
-        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getAngle: (q: { hdg: number }) => bearing - q.hdg, updateTriggers: { getPosition: [elev, k], getAngle: bearing },
+        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getAngle: (q: { hdg: number }) => screen(q.hdg), updateTriggers: { getPosition: [elev, k], getAngle: [brg, pit] },
       }));
-      out.push(text('survey-label', d, {
-        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getPixelOffset: [36, 0], getTextAnchor: 'start', getColor: rgba(RGB.allied),
+      out.push(label('survey-label', d, {
+        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getPixelOffset: [36, 0], getColor: rgba(RGB.allied),
         getText: (q: { id: string; status: string; risk: number }) => `${q.id} SURVEY · ${q.status.toUpperCase()} · RISK ${pct(q.risk)}`, updateTriggers: { getPosition: [elev, k] },
       }));
     }
     return out;
-  }, [frame, prev, s, elev, mode, drones, dets, firstSeen, p.selectedTrack, p.reconRoute, p.playing, bearing, k, start, goal, routes, activeRoute]);
+  };
 
-  useEffect(() => { overlayRef.current?.setProps({ layers: [...coverage, ...layers] }); }, [coverage, layers]);
+  // One animation loop (~30 fps) composes coverage sweeps + slow layers + per-frame layers straight into deck.gl.
+  const missionLs = useMemo(() => (mode === 'survey' ? missionLayers(shownMission, atTerrain, DEFAULT_MISSION, { bearing }) : []), [mode, shownMission, atTerrain, bearing]);
+  const slow = useRef<Layer[]>([]);
+  slow.current = missionLs.length ? [...layers, ...missionLs] : layers;
+  const hidden = mode === 'provenance'; // the lineage view covers the map: stop drawing under it
+  const anim = useRef({ playing: p.playing, sensors: s.sensors, at: atTerrain, focus: (mode === 'enemy' ? 'allied' : 'enemy') as 'allied' | 'enemy', hidden });
+  anim.current = { playing: p.playing, sensors: s.sensors, at: atTerrain, focus: mode === 'enemy' ? 'allied' : 'enemy', hidden };
+  const push = useCallback((now: number) => {
+    const overlay = overlayRef.current, map = mapRef.current;
+    if (!overlay || !map) return;
+    const a = anim.current;
+    if (a.hidden) { overlay.setProps({ layers: [] }); return; }
+    const still = reduceMotion();
+    const k = a.playing && !still ? Math.min(1, (now - tChangedAt.current) / STEP_MS) : 1;
+    overlay.setProps({
+      layers: [...coverageLayers(a.sensors, a.at, { focus: a.focus, timeMs: still ? 0 : now }), ...slow.current, ...dynamic.current(k, map.getBearing(), map.getPitch())],
+    });
+  }, []);
+  useEffect(() => { push(performance.now()); }); // after every React render (new second, tab, selection)
+  useEffect(() => {
+    if (reduceMotion()) return;
+    let raf = 0, last = 0;
+    const tick = (now: number) => {
+      if (now - last >= 33) { last = now; push(now); }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [push]);
 
   // ---- camera ----
   const cam = (o: { pitch?: number; bearing?: number }) => mapRef.current?.easeTo({ ...o, duration: 600 });
-  const recenter = () => {
+  const recenter = (bounds = activityBounds(s), zoomIn = OPENING_ZOOM_IN) => {
     const map = mapRef.current;
     if (!map) return;
     const { pitch: pt, bearing: br } = { pitch: map.getPitch(), bearing: map.getBearing() };
-    const cam0 = map.cameraForBounds(activityBounds(s), { padding: framePadding(map) });
-    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? OPENING_ZOOM_IN : 0), pitch: pt, bearing: br, duration: 600 });
+    const cam0 = map.cameraForBounds(bounds, { padding: framePadding(map) });
+    if (cam0) map.easeTo({ ...cam0, zoom: (cam0.zoom ?? map.getZoom()) + (pt > 20 ? zoomIn : 0), pitch: pt, bearing: br, duration: 600 });
   };
   const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1200 });
 
@@ -479,18 +583,22 @@ export default function OpsMap(p: Props) {
   const selTeam = frame?.launch_teams.find((lt) => lt.track_ids.includes(p.selectedTrack ?? '')) ?? null;
 
   return (
-    <div className="ops">
+    <div className={hidden ? 'ops is-pv' : 'ops'}>
       <div ref={box} className="ops-map" />
+      {hidden && <ProvenanceView scenario={s} t={t} onJump={p.onJump ?? noop} onSelectTrack={(id) => p.onSelectTrack(id)} />}
 
       <div className="ops-modes" role="tablist" aria-label="Map layer">
         {MODES.map((x) => (
           <button key={x.id} role="tab" aria-selected={mode === x.id} className={mode === x.id ? 'on' : ''}
-            onClick={() => { setMode(x.id); setPickStart(false); }}>{x.label}</button>
+            onClick={() => { setMode(x.id); setPickStart(false); if (x.id === 'survey' && mode !== 'survey') recenter(BOX_BOUNDS, 0); }}><span className="ops-mode-code">{x.code}</span>{x.label}</button>
         ))}
       </div>
       <div className="badge sim-badge">SIM // ALL DATA SIMULATED</div>
+      {!hidden && <div className="hud-frame" aria-hidden="true"><i /><i /><i /><i /></div>}
+      {!hidden && <div className="ops-ao" aria-label="Area of operations">AO <b>NTC FORT IRWIN</b> · 10 KM BOX · ILLUSTRATIVE PLACEMENT ON REAL TERRAIN</div>}
 
-      <section className={`ops-card${cardOpen ? '' : ' is-collapsed'}`} aria-label={`${m.label} panel`}>
+      {!hidden && (<>
+      <section ref={card} className={`ops-card${cardOpen ? '' : ' is-collapsed'}`} aria-label={`${m.label} panel`}>
         <button className="ops-collapse" onClick={() => setCardOpen((v) => !v)} aria-expanded={cardOpen}>
           {cardOpen ? 'Hide panel' : `${m.label} panel`}
         </button>
@@ -518,7 +626,7 @@ export default function OpsMap(p: Props) {
         ) : (
           <>
             <span className="micro">Hostile tracks · T+{pad3(t)}</span>
-            {drones.length === 0 && <p className="ops-note">No tracks yet. Press play.</p>}
+            {drones.length === 0 && <p className="ops-note">{p.playing ? 'Waiting for the first fused track.' : 'No tracks yet. Press play.'}</p>}
             <ul className="ops-list">
               {drones.map((d) => (
                 <li key={d.id}><button onClick={() => { p.onSelectTrack(d.id); }}>
@@ -547,6 +655,11 @@ export default function OpsMap(p: Props) {
           </>
         )}
 
+        {mode === 'survey' && (
+          <AutonomyPanel state={shownMission} playing={p.playing} maxRisk={DEFAULT_MISSION.maxRisk}
+            onArm={armSurvey} onAbort={() => setMission(abortMission)} onReset={() => setMission(initMission(DEFAULT_MISSION, null, null))} />
+        )}
+
         {mode === 'route' && (
           <>
             <span className="micro">Safest route</span>
@@ -559,7 +672,7 @@ export default function OpsMap(p: Props) {
               {routes.map((r, i) => (
                 <li key={r.id}><button className={i === activeRoute ? 'on' : ''} onClick={() => setActiveRoute(i)}>
                   <b>ROUTE {r.id}</b>
-                  <span>{km(r.length_m)} · risk {pct(r.risk)} · peak {pct(r.max_threat)}</span>
+                  <span>{km(r.length_m)} · exposed {km(r.exposure_m)} · peak {pct(r.max_threat)}</span>
                 </button></li>
               ))}
             </ul>
@@ -586,10 +699,11 @@ export default function OpsMap(p: Props) {
         <button onClick={() => cam({ bearing: bearing + 30 })} aria-label="Rotate right">⟳</button>
         <button onClick={() => cam({ pitch: Math.min(85, pitch + 10) })} aria-label="Tilt up">▲</button>
         <button onClick={() => cam({ pitch: Math.max(0, pitch - 10) })} aria-label="Tilt down">▼</button>
-        <button onClick={recenter} aria-label="Recenter">⌖</button>
-        <output className="ops-cam-readout">P{pad3(pitch)} B{pad3((bearing + 360) % 360)}</output>
+        <button onClick={() => (mode === 'survey' ? recenter(BOX_BOUNDS, 0) : recenter())} aria-label="Recenter">⌖</button>
+        <output ref={camOut} className="ops-cam-readout">P{pad3(pitch)} B{pad3((bearing + 360) % 360)}</output>
       </div>
-      <div ref={cursor} className="hud-readout ops-readout" aria-hidden="true">CURSOR OFF MAP</div>
+      </>)}
+      <div ref={cursor} className="hud-readout ops-readout" aria-hidden="true" hidden={hidden}>CURSOR OFF MAP</div>
     </div>
   );
 }

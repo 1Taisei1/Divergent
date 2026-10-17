@@ -9,11 +9,12 @@ const ALT_RADIUS_CELLS = 3;
 const SIMPLIFY_M = 80;
 
 export interface PlannedRoute {
-  id: string; // A, B, C
+  id: string; // A, B, C in order of planner cost (A = recommended)
   points: Point[];
   length_m: number;
-  risk: number; // mean threat along the route, 0..1
-  max_threat: number;
+  exposure_m: number; // integrated threat x distance: "metres flown fully exposed"
+  max_threat: number; // peak threat on the route, 0..1
+  cost: number; // the planner's own score: distance x (1 + THREAT_WEIGHT x threat)
 }
 
 const NEIGHBOURS: [number, number, number][] = [
@@ -111,18 +112,19 @@ export function threatAt(threat: Grid, p: Point): number {
 }
 
 function stats(threat: Grid, pts: Point[]) {
-  let length = 0, sum = 0, n = 0, max = 0;
+  let length = 0, exposure = 0, max = 0;
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i];
     const seg = Math.hypot(b.x - a.x, b.y - a.y);
     length += seg;
     const steps = Math.max(1, Math.ceil(seg / 50));
     for (let k = 0; k < steps; k++) {
-      const v = threatAt(threat, { x: a.x + ((b.x - a.x) * k) / steps, y: a.y + ((b.y - a.y) * k) / steps });
-      sum += v; n++; max = Math.max(max, v);
+      const v = threatAt(threat, { x: a.x + ((b.x - a.x) * (k + 0.5)) / steps, y: a.y + ((b.y - a.y) * (k + 0.5)) / steps });
+      exposure += (v * seg) / steps;
+      max = Math.max(max, v);
     }
   }
-  return { length_m: length, risk: n ? sum / n : 0, max_threat: max };
+  return { length_m: length, exposure_m: exposure, max_threat: max, cost: length + THREAT_WEIGHT * exposure };
 }
 
 export function planRoutes(threat: Grid, start: Point, goal: Point, count = 3): PlannedRoute[] {
@@ -140,21 +142,24 @@ export function planRoutes(threat: Grid, start: Point, goal: Point, count = 3): 
     if (!cells) break;
     const set = new Set(cells);
     const overlap = used.length ? Math.max(...used.map((u) => cells.filter((c) => u.has(c)).length / cells.length)) : 0;
-    // Push later searches away from this corridor whether or not we keep it.
+    // Push later searches away from this corridor whether or not we keep it (each nearby cell penalised once).
+    const corridor = new Set<number>();
     for (const c of cells) {
       const cx = c % W, cy = Math.floor(c / W);
       for (let dy = -ALT_RADIUS_CELLS; dy <= ALT_RADIUS_CELLS; dy++) {
         for (let dx = -ALT_RADIUS_CELLS; dx <= ALT_RADIUS_CELLS; dx++) {
           const nx = cx + dx, ny = cy + dy;
-          if (nx >= 0 && ny >= 0 && nx < W && ny < H && dx * dx + dy * dy <= ALT_RADIUS_CELLS ** 2) cost[ny * W + nx] += ALT_PENALTY;
+          if (nx >= 0 && ny >= 0 && nx < W && ny < H && dx * dx + dy * dy <= ALT_RADIUS_CELLS ** 2) corridor.add(ny * W + nx);
         }
       }
     }
+    for (const c of corridor) cost[c] += ALT_PENALTY;
     if (overlap > 0.7) continue; // too close to a route we already have
     used.push(set);
     const centres = cells.map((c) => ({ x: ((c % W) + 0.5) * cell, y: (Math.floor(c / W) + 0.5) * cell }));
     const pts = simplify([start, ...centres.slice(1, -1), goal], SIMPLIFY_M);
-    routes.push({ id: String.fromCharCode(65 + routes.length), points: pts, ...stats(threat, pts) });
+    routes.push({ id: '', points: pts, ...stats(threat, pts) });
   }
-  return routes;
+  // Rank by the planner's own cost and letter after sorting, so A is always the recommendation.
+  return routes.sort((a, b) => a.cost - b.cost).map((r, i) => ({ ...r, id: String.fromCharCode(65 + i) }));
 }
