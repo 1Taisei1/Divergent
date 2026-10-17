@@ -31,7 +31,7 @@ Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
 - [x] **4. `api/main.py`** — FastAPI with CORS `*`: `GET /health`, `GET /scenarios`, `GET /scenario/{id}`. Build all presets at
   startup and cache them in memory. Run it and curl each route.
 
-- [ ] **5. Deploy to Freestyle.** Follow their docs: run `uvicorn api.main:app --host 0.0.0.0 --port 8000` in a VM and expose the
+- [x] **5. Deploy to Freestyle.** Follow their docs: run `uvicorn api.main:app --host 0.0.0.0 --port 8000` in a VM and expose the
   preview URL. Send the URL to Neil for `VITE_API_URL`. Write the exact commands into `api/DEPLOY.md`.
 
 - [x] **6. Presets.** `single` (one team, one drone), `swarm` (one team launching 6 drones at once at t=20), `sparse` (only S1
