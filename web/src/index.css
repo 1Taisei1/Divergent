@@ -128,3 +128,8 @@ button.ghost { background: none; }
 .sites { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .site-row { display: flex; gap: 10px; align-items: flex-start; }
 .site-row .hint { margin: 2px 0 0; }
+
+.site-pin { width: 26px; height: 26px; margin: 0; border-radius: 50% 50% 50% 0; background: #fff; transform: rotate(-45deg); border: 3px solid #ff5a1f; box-shadow: 0 0 12px rgba(255, 255, 255, 0.7); }
+.map .confirmed-label { color: #fff !important; border-color: #fff !important; }
+.alert.kind-launch_site_confirmed { border-left-color: #fff; }
+.confirmed { background: #10261a; border: 1px solid var(--ok); border-radius: 10px; padding: 8px 12px; color: var(--ok); font-weight: 600; }

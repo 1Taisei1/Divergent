@@ -185,7 +185,7 @@ for (let t = 0; t < N_FRAMES; t++) {
   }
 
   frames.push({ t, detections, tracks: frameTracks, origins, launch_teams, origin_heatmap, forecast_heatmap,
-    exposure_grid: exposure, routes, recon: null, alerts: alerts[t] ?? [] });
+    exposure_grid: exposure, routes, recon: null, confirmed_sites: [], alerts: alerts[t] ?? [] });
 }
 
 const scenario = {

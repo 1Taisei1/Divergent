@@ -1,6 +1,6 @@
 // Local previews used only when no VITE_API_URL is set, so the UI can be built and demoed from the fixture.
 // They imitate the API's shapes; the real logic lives in Diego's api/ and Ali's planning/ modules.
-import type { Point, ReconLogEntry, ReconRoute, ReconState, Scenario, WhatIfRequest } from './types';
+import type { ConfirmedSite, Point, ReconLogEntry, ReconRoute, ReconState, Scenario, WhatIfRequest } from './types';
 
 const clone = <T,>(v: T): T => structuredClone(v);
 
@@ -63,7 +63,9 @@ function fly(s: Scenario, route: ReconRoute, t0: number, abortT: number | null):
   let returnT = 0;
   let status: ReconState['status'] = 'flying';
   log.push({ t: t0, event: 'flying' });
+  const seen = new Map<string, ConfirmedSite>();
   for (const f of out.frames) {
+    f.confirmed_sites = [];
     if (f.t < t0) { f.recon = null; continue; }
     if (abortT !== null && f.t >= abortT && !returnFrom) {
       const prev = out.frames[f.t - 1]?.recon;
@@ -85,6 +87,17 @@ function fly(s: Scenario, route: ReconRoute, t0: number, abortT: number | null):
     }
     p = clamp(p);
     f.recon = { route_id: route.id, x: Math.round(p.x), y: Math.round(p.y), status, risk_now: route.risk };
+    for (const lt of f.launch_teams) {
+      const site = lt.origin_history[lt.origin_history.length - 1];
+      if (!site || Math.hypot(site.x - p.x, site.y - p.y) > 1000) continue;
+      const prev = seen.get(lt.id);
+      seen.set(lt.id, { team_id: lt.id, x: site.x, y: site.y, radius_m: 60, first_seen_t: prev?.first_seen_t ?? f.t, last_seen_t: f.t, source: route.id });
+      if (!prev) f.alerts = [...f.alerts, { t: f.t, kind: 'launch_site_confirmed', ref_id: lt.id,
+        message: `Survey ${route.id} pinpointed the launch site of ${lt.id} at (${Math.round(site.x)}, ${Math.round(site.y)}) ±60 m.`,
+        recommended_action: 'Site confirmed; keep monitoring and report it.' }];
+    }
+    f.confirmed_sites = [...seen.values()].map((c) => ({ ...c }));
+    for (const lt of f.launch_teams) if (seen.has(lt.id)) lt.confirmed = true;
   }
   out.recon_route = { ...route, status: abortT !== null ? 'aborted' : 'flying', log };
   return out;
@@ -97,7 +110,7 @@ export function reconApproveOffline(s: Scenario, route: ReconRoute, operator: st
 }
 
 export function reconAbortOffline(s: Scenario, route: ReconRoute, t: number): Scenario {
-  const t0 = route.approved_at ?? t;
+  const t0 = typeof route.approved_at === 'number' ? route.approved_at : t;
   const base: ReconRoute = { ...clone(route), log: route.log.filter((e) => e.event === 'proposed' || e.event === 'approved') };
   return fly(s, base, t0, t);
 }

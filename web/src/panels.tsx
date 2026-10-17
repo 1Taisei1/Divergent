@@ -111,7 +111,7 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
     <div className="panel">
       <p className="hint">Surveillance only. A survey drone never moves until a named operator approves it, stays inside its geofence, and returns home automatically if risk gets too high.</p>
       <button className="primary" disabled={busy || !!live} onClick={() => run(async () => setProposed(await reconPropose(scenario, t), t))}>
-        Propose survey at t = {t} s
+        {live ? 'Survey in progress' : `Propose survey at t = ${t} s`}
       </button>
       {err && <div className="error">{err}</div>}
       {route && (
@@ -121,7 +121,13 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
             <div><span>Route risk</span><b className={route.risk > 0.6 ? 'bad' : route.risk > 0.33 ? 'warn' : 'ok'}>{pct(route.risk)}</b></div>
             <div><span>Status</span><b>{now?.status ?? route.status}</b></div>
           </div>
-          {now && <div className="alert-meta">Drone at ({now.x}, {now.y}) m · risk now {pct(now.risk_now)}</div>}
+          {now && <div className="alert-meta">Drone at ({Math.round(now.x)}, {Math.round(now.y)}) m · risk now {pct(now.risk_now)}</div>}
+          {(frameAt(scenario, t)?.confirmed_sites ?? []).map((c) => (
+            <div key={c.team_id} className="confirmed">
+              ✓ {c.team_id} launch site confirmed at ({Math.round(c.x)}, {Math.round(c.y)}) m ±{Math.round(c.radius_m)} m
+              <div className="alert-meta">first seen t = {c.first_seen_t} s by {c.source}</div>
+            </div>
+          ))}
           {!live && (
             <>
               <label className="field">Operator name
@@ -143,7 +149,12 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
           <div className="log">
             <div className="alert-meta">Log</div>
             {route.log.filter((e) => e.t <= t).map((e, i) => <div key={i}>t = {e.t} s · {e.event}{e.by ? ` by ${e.by}` : ''}</div>)}
-            {route.approved_by && <div>Approved by <b>{route.approved_by}</b> at t = {route.approved_at} s</div>}
+            {route.approved_by && (
+              <div>Approved by <b>{route.approved_by}</b>{' '}
+                {typeof route.approved_at === 'number' ? `at t = ${route.approved_at} s`
+                  : route.approved_at ? `at ${new Date(route.approved_at).toLocaleTimeString()}` : ''}
+              </div>
+            )}
           </div>
         </div>
       )}
