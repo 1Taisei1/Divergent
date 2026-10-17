@@ -6,7 +6,8 @@ import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
 import type { Alert, ReconRoute, Scenario } from './types';
 
-export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l: Layers) => void }) {
+export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario; layers: Layers; setLayers: (l: Layers) => void }) {
+  const sites = scenario.launch_site_options ?? [];
   return (
     <div className="panel">
       {(Object.keys(LAYERS) as LayerKey[]).map((k) => (
@@ -24,7 +25,19 @@ export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l
         <div role="listitem"><i className="lg-dot clutter" /> Clutter</div>
         <div role="listitem"><i className="lg-ret" /> Estimated launch site</div>
         <div role="listitem"><i className="lg-fill forecast" /> Next-launch forecast</div>
+        <div role="listitem"><i className="lg-box safe" /> Our safe launch area</div>
       </div>
+      {sites.length > 0 && (
+        <div className="sites">
+          <div className="alert-meta">Our safest launch sites (hardest for enemy sensors to trace back)</div>
+          {sites.map((o, i) => (
+            <div key={i} className="site-row">
+              <span className="launch-site small">{i + 1}</span>
+              <div><b>({o.x}, {o.y}) m · {pct(o.concealment)}</b><div className="hint">{o.reason}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
       <p className="hint">Click a drone to see which sensors fed its track. Right-click an allied sensor for a what-if.</p>
     </div>
   );
@@ -100,7 +113,7 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
     <div className="panel">
       <p className="hint">Surveillance only. A survey drone never moves until a named operator approves it, stays inside its geofence, and returns home automatically if risk gets too high.</p>
       <button className="primary" disabled={busy || !!live} onClick={() => run(async () => setProposed(await reconPropose(scenario, t), t))}>
-        Propose survey at t = {t} s
+        {live ? 'Survey in progress' : `Propose survey at t = ${t} s`}
       </button>
       {err && <div className="error">{err}</div>}
       {route && (
@@ -110,7 +123,13 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
             <div><span>Route risk</span><b className={route.risk > 0.6 ? 'bad' : route.risk > 0.33 ? 'warn' : 'ok'}>{pct(route.risk)}</b></div>
             <div><span>Status</span><b>{now?.status ?? route.status}</b></div>
           </div>
-          {now && <div className="alert-meta">Drone at ({now.x}, {now.y}) m · risk now {pct(now.risk_now)}</div>}
+          {now && <div className="alert-meta">Drone at ({Math.round(now.x)}, {Math.round(now.y)}) m · risk now {pct(now.risk_now)}</div>}
+          {(frameAt(scenario, t)?.confirmed_sites ?? []).map((c) => (
+            <div key={c.team_id} className="confirmed">
+              ✓ {c.team_id} launch site confirmed at ({Math.round(c.x)}, {Math.round(c.y)}) m ±{Math.round(c.radius_m)} m
+              <div className="alert-meta">first seen t = {c.first_seen_t} s by {c.source}</div>
+            </div>
+          ))}
           {!live && (
             <>
               <label className="field">Operator name
@@ -132,7 +151,12 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
           <div className="log">
             <div className="alert-meta">Log</div>
             {route.log.filter((e) => e.t <= t).map((e, i) => <div key={i}>t = {e.t} s · {e.event}{e.by ? ` by ${e.by}` : ''}</div>)}
-            {route.approved_by && <div>Approved by <b>{route.approved_by}</b>{typeof route.approved_at === 'number' ? ` at T+${pad3(route.approved_at)}` : ''}</div>}
+            {route.approved_by && (
+              <div>Approved by <b>{route.approved_by}</b>{' '}
+                {typeof route.approved_at === 'number' ? `at T+${pad3(route.approved_at)}`
+                  : route.approved_at ? `at ${new Date(route.approved_at).toLocaleTimeString()}` : ''}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -140,10 +164,13 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
   );
 }
 
+// The API may send null for a metric it couldn't compute; show a dash rather than a misleading 0.
+const num = (v: number | null | undefined, unit: string) => (typeof v === 'number' && Number.isFinite(v) ? `${Math.round(v)}${unit}` : '–');
+
 export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
   const m = scenario.metrics;
   if (!m) return <div className="panel empty">No metrics for this scenario yet.</div>;
-  const pts = Object.entries(m.origin_error_m_by_t).map(([k, v]) => ({ t: Number(k), v })).sort((a, b) => a.t - b.t);
+  const pts = Object.entries(m.origin_error_m_by_t ?? {}).filter(([, v]) => typeof v === 'number').map(([k, v]) => ({ t: Number(k), v })).sort((a, b) => a.t - b.t);
   const first = pts.find((p) => p.t === 30) ?? pts[0];
   const now = [...pts].reverse().find((p) => p.t <= t) ?? pts[pts.length - 1];
   const W = 300, H = 120, P = 24;
@@ -155,9 +182,9 @@ export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
     <div className="panel">
       <div className="big-numbers">
         <div><span>Origin error at t = {first?.t ?? '–'} s</span><b>{first ? `${Math.round(first.v)} m` : '–'}</b></div>
-        <div><span>Origin error at t = {now?.t ?? '–'} s</span><b className="ok">{now ? `${Math.round(now.v)} m` : '–'}</b></div>
-        <div><span>Track RMSE</span><b>{Math.round(m.track_rmse_m)} m</b></div>
-        <div><span>Clutter filtered</span><b>{Math.round(m.clutter_filtered_pct)}%</b></div>
+        <div><span>Origin error at t = {now?.t ?? '–'} s</span><b className={now && first && now.t !== first.t ? (now.v <= first.v ? 'ok' : 'bad') : ''}>{now ? `${Math.round(now.v)} m` : '–'}</b></div>
+        <div><span>Track RMSE</span><b>{num(m.track_rmse_m, ' m')}</b></div>
+        <div><span>Clutter filtered</span><b>{num(m.clutter_filtered_pct, '%')}</b></div>
       </div>
       {pts.length > 1 && (
         <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Origin error over time">

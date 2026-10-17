@@ -37,7 +37,7 @@ Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
 - [x] **6. Presets.** `single` (one team, one drone), `swarm` (one team launching 6 drones at once at t=20), `sparse` (only S1
   and S4 active).
 
-- [ ] **7. What-if.** `POST /scenario/{id}/whatif` with body `{sensor_id, action: "disable"|"move", x?, y?}` → rebuild with
+- [x] **7. What-if.** `POST /scenario/{id}/whatif` with body `{sensor_id, action: "disable"|"move", x?, y?}` → rebuild with
   overrides and return the Scenario (don't cache it). Then the Freestyle clone flow: pause the running VM, clone it, apply a
   what-if in the clone, and serve it on its own preview URL. Document the steps in `api/DEPLOY.md`.
 

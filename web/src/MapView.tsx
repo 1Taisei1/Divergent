@@ -21,11 +21,15 @@ export const LAYERS = {
   exposure: 'Enemy sensor coverage',
   routes: 'Friendly routes',
   suggestion: 'Sensor suggestion',
+  launchSites: 'Our safest launch sites',
+  launchHeat: 'Our launch concealment map',
   recon: 'Survey route + drone',
 } as const;
 export type LayerKey = keyof typeof LAYERS;
 export type Layers = Record<LayerKey, boolean>;
-export const ALL_LAYERS = Object.fromEntries(Object.keys(LAYERS).map((k) => [k, true])) as Layers;
+// Off by default: on most scenarios nearly the whole map is hidden from enemy sensors, so the wash is noise until asked for.
+const OFF_BY_DEFAULT: LayerKey[] = ['launchHeat'];
+export const ALL_LAYERS = Object.fromEntries(Object.keys(LAYERS).map((k) => [k, !OFF_BY_DEFAULT.includes(k as LayerKey)])) as Layers;
 
 const BOUNDS: L.LatLngBoundsExpression = [ll(0, 0), ll(MAP_SIZE, MAP_SIZE)];
 const C = { allied: HUD.allied, enemy: HUD.hostile, track: HUD.hostile, safe: '#3fd68a', amber: '#ffb02e', dim: 0.15 };
@@ -34,6 +38,9 @@ const GRID_LINES = Array.from({ length: MAP_SIZE / 1000 + 1 }, (_, i) => i * 100
 const RECON_FOOTPRINT_M = 1000; // the survey drone sees drones and launch sites within this radius (planning/recon.py)
 
 const plusIcon = L.divIcon({ className: '', html: '<div class="suggest-plus" aria-hidden="true">+</div>', iconSize: [40, 40], iconAnchor: [20, 20] });
+const siteIcon = (n: number) =>
+  L.divIcon({ className: '', html: `<div class="launch-site">${n}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+const pinIcon = L.divIcon({ className: '', html: '<div class="site-pin"></div>', iconSize: [26, 34], iconAnchor: [13, 32] });
 
 export function frameAt(s: Scenario, t: number): Frame | undefined {
   return s.frames.find((f) => f.t === t) ?? s.frames[Math.min(Math.max(0, t), s.frames.length - 1)];
@@ -109,8 +116,12 @@ export default function MapView(p: Props) {
           {on.forecast && hasHeat(frame?.forecast_heatmap) && (
             <ImageOverlay url={gridImage(frame.forecast_heatmap, RAMPS.forecast)} bounds={gridBounds(frame.forecast_heatmap)} />
           )}
+          {on.launchHeat && hasHeat(s.launch_site_grid) && (
+            <ImageOverlay url={gridImage(s.launch_site_grid, RAMPS.launch)} bounds={gridBounds(s.launch_site_grid)} />
+          )}
           {on.originHeat && hasHeat(frame?.origin_heatmap) && (
-            <ImageOverlay url={gridImage(frame.origin_heatmap, RAMPS.origin)} bounds={gridBounds(frame.origin_heatmap)} />
+            <ImageOverlay url={gridImage(frame.origin_heatmap, RAMPS.origin)} bounds={gridBounds(frame.origin_heatmap)}
+              opacity={frame.confirmed_sites?.length ? 0.35 : 1} />
           )}
         </Pane>
 
@@ -220,7 +231,9 @@ export default function MapView(p: Props) {
                 <Polygon key={i} positions={arrowHead(h[i], pt)} pathOptions={{ color: '#ff8a3d', fillColor: '#ff8a3d', fillOpacity: 1, weight: 1 }} interactive={false} />
               ))}
               <CircleMarker center={llp(h[h.length - 1])} radius={3} interactive={false} pathOptions={{ opacity: 0, fillOpacity: 0 }}>
-                <Tooltip permanent direction="bottom" offset={[0, 14]} className="map-label team-label">{`${lt.id} · ${h.length} SITE${h.length > 1 ? 'S' : ''}`}</Tooltip>
+                <Tooltip permanent direction="bottom" offset={[0, 14]} className="map-label team-label">
+                  {`${lt.id} · ${lt.confirmed ? 'CONFIRMED' : `${h.length} SITE${h.length > 1 ? 'S' : ''}`}`}
+                </Tooltip>
               </CircleMarker>
             </span>
           );
@@ -234,6 +247,14 @@ export default function MapView(p: Props) {
           </Marker>
         )}
 
+        {on.launchSites && (s.launch_site_options ?? []).map((o, i) => (
+          <Marker key={`site-${i}`} position={ll(o.x, o.y)} icon={siteIcon(i + 1)}>
+            <Tooltip direction="top" offset={[0, -16]} className="wide-tip">
+              <b>Our launch site #{i + 1}</b> · concealment {pct(o.concealment)}<br />{o.reason}
+            </Tooltip>
+          </Marker>
+        ))}
+
         {on.recon && p.reconRoute && (
           <>
             <Rectangle bounds={[ll(p.reconRoute.geofence.x_min, p.reconRoute.geofence.y_min), ll(p.reconRoute.geofence.x_max, p.reconRoute.geofence.y_max)]}
@@ -241,6 +262,18 @@ export default function MapView(p: Props) {
             <Polyline positions={p.reconRoute.waypoints.map(llp)} pathOptions={{ color: '#ffffff', weight: 2.5, dashArray: '10 8', opacity: 0.85 }} interactive={false} />
           </>
         )}
+        {on.origins && frame?.confirmed_sites?.map((c) => (
+          <span key={`cs-${c.team_id}`}>
+            <Circle center={ll(c.x, c.y)} radius={Math.max(c.radius_m, 60)} interactive={false}
+              pathOptions={{ color: HUD.friendly, weight: 2, fillColor: HUD.friendly, fillOpacity: 0.25 }} />
+            <Marker position={ll(c.x, c.y)} icon={pinIcon}>
+              <Tooltip permanent direction="right" offset={[12, -18]} className="map-label confirmed-label">
+                {`${c.team_id} SITE CONFIRMED ±${Math.round(c.radius_m)} M`}
+              </Tooltip>
+            </Marker>
+          </span>
+        ))}
+
         {on.recon && frame?.recon && (() => {
           const r = frame.recon;
           const before = prev?.recon?.route_id === r.route_id ? prev.recon : null;

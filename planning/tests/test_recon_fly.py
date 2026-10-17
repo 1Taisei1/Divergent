@@ -145,3 +145,17 @@ def test_detections_from_truth_paths():
             # within detection range of the drone's position at that t
             st = recon_by_t[t]
             assert math.hypot(d["x"] - st["x"], d["y"] - st["y"]) <= DETECT_RANGE_M + 1e-6
+
+
+def test_route_that_never_leaves_home_ends_returned():
+    raw = fake_raw()
+    eg, _routes = exposure_run(raw)
+    home = {"x": HOME_BASE["x"], "y": HOME_BASE["y"]}
+    route = {"id": "R1", "waypoints": [home], "info_gain": 0, "risk": 0,
+             "geofence": {"x_min": home["x"] - 500, "x_max": home["x"] + 500,
+                          "y_min": home["y"] - 500, "y_max": home["y"] + 500},
+             "status": "approved", "approved_by": "operator", "approved_at": 40,
+             "log": [{"t": 40, "event": "approved", "by": "operator"}]}
+    recon_by_t, _dets, log = fly(raw, route, 40, eg)
+    assert log[-1]["event"] == "returned"
+    assert max(recon_by_t) < 45

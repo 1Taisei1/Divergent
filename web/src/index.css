@@ -113,6 +113,7 @@ main { display: grid; grid-template-columns: minmax(0, 70fr) minmax(320px, 30fr)
 .origin-label { color: var(--origin) !important; border-color: var(--origin) !important; }
 .team-label { color: var(--origin) !important; }
 .wide-tip { white-space: normal; width: 300px; }
+.confirmed-label { color: var(--text) !important; border-color: var(--text) !important; }
 
 /* Map glyphs */
 .drone-icon { background: none; border: 0; }
@@ -137,7 +138,7 @@ main { display: grid; grid-template-columns: minmax(0, 70fr) minmax(320px, 30fr)
 
 /* Side panel */
 aside { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-nav { display: flex; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+nav { display: flex; flex: none; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 nav button { flex: 1 0 auto; white-space: nowrap; background: none; border: 0; padding: 12px 8px 10px; color: var(--muted); font-size: 13px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 2px solid transparent; transition: color 150ms var(--ease); }
 nav button:hover { color: var(--text); }
 nav button.on { color: var(--text); border-bottom-color: var(--text); }
@@ -160,6 +161,7 @@ nav button.on { color: var(--text); border-bottom-color: var(--text); }
 .legend .lg-box { border: 2px solid; }
 .legend .lg-box.allied { border-color: var(--allied); }
 .legend .lg-box.enemy { border-color: var(--hazard); }
+.legend .lg-box.safe { border-color: var(--ok); }
 .legend .lg-dot { width: 8px; height: 8px; margin: 3px; }
 .legend .lg-dot.det { background: #7ff0ff; }
 .legend .lg-dot.clutter { background: #8a8f98; }
@@ -174,7 +176,7 @@ nav button.on { color: var(--text); border-bottom-color: var(--text); }
 .alert .kind::before { content: ''; width: 8px; height: 8px; background: currentColor; }
 .alert.kind-new_track .kind { color: var(--text); }
 .alert.kind-track_lost .kind { color: var(--faint); }
-.alert.kind-origin_confident .kind, .alert.kind-launch_forecast .kind, .alert.kind-launch_team_moved .kind, .alert.kind-launch_site_confirmed .kind { color: var(--origin); }
+.alert.kind-origin_confident .kind, .alert.kind-launch_forecast .kind, .alert.kind-launch_team_moved .kind { color: var(--origin); }
 .alert.kind-route_exposed .kind, .alert.kind-recon_auto_return .kind { color: var(--hazard); }
 .alert-msg { font-size: 15px; }
 .alert-action { color: var(--text); font-weight: 800; font-size: 15px; }
@@ -237,3 +239,13 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 @media (prefers-reduced-motion: reduce) {
   .src.live::before, .suggest-plus { animation: none; }
 }
+
+/* Our safest launch sites (Neil) and recon-confirmed enemy sites, in the HUD vocabulary */
+.launch-site { width: 30px; height: 30px; display: grid; place-items: center; background: oklch(0.13 0.005 60 / 0.9); color: var(--ok); border: 2px solid var(--ok); font: 800 15px/1 var(--mono); }
+.launch-site.small { width: 26px; height: 26px; font-size: 13px; flex: none; }
+.sites { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.site-row { display: flex; gap: 10px; align-items: flex-start; }
+.site-row .hint { margin: 2px 0 0; }
+.site-pin { width: 26px; height: 26px; margin: 0; border-radius: 50% 50% 50% 0; background: var(--text); transform: rotate(-45deg); border: 3px solid var(--hazard); }
+.alert.kind-launch_site_confirmed .kind { color: var(--text); }
+.confirmed { background: var(--panel-2); border: 1px solid var(--ok); padding: 8px 12px; color: var(--ok); font-weight: 700; }

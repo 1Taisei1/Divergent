@@ -62,6 +62,18 @@ export interface LaunchTeam {
   id: string;
   origin_history: TimedPoint[];
   track_ids: string[];
+  confirmed?: boolean; // set once the recon drone has pinpointed this team's site
+}
+
+// Recon pinpoint: present once an approved survey drone has seen a launch site; stays at last known position.
+export interface ConfirmedSite {
+  team_id: string;
+  x: number;
+  y: number;
+  radius_m: number;
+  first_seen_t: number;
+  last_seen_t: number;
+  source: string;
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';
@@ -79,6 +91,16 @@ export interface SensorSuggestion {
   x: number;
   y: number;
   uncertainty_reduction: number;
+  reason: string;
+}
+
+export interface LaunchSiteOption {
+  x: number;
+  y: number;
+  concealment: number;
+  exposure_at_site: number;
+  distance_to_coverage_m: number | null;
+  nearest_enemy_sensor: string | null;
   reason: string;
 }
 
@@ -105,7 +127,7 @@ export interface ReconRoute {
   geofence: Geofence;
   status: ReconStatus;
   approved_by: string | null;
-  approved_at: number | null;
+  approved_at: number | string | null; // the API sends an ISO timestamp; the fixture uses t in seconds
   log: ReconLogEntry[];
 }
 
@@ -131,7 +153,8 @@ export type AlertKind =
   | 'launch_team_moved'
   | 'launch_forecast'
   | 'route_exposed'
-  | 'recon_auto_return';
+  | 'recon_auto_return'
+  | 'launch_site_confirmed';
 
 export interface Alert {
   t: number;
@@ -155,6 +178,7 @@ export interface Frame {
   exposure_grid: MaybeGrid;
   routes: FriendlyRoute[];
   recon: ReconState | null;
+  confirmed_sites: ConfirmedSite[];
   alerts: Alert[];
 }
 
@@ -172,6 +196,8 @@ export interface Scenario {
   duration_s: number;
   sensors: Sensor[];
   sensor_suggestion: SensorSuggestion | null;
+  launch_site_grid: Grid | null;
+  launch_site_options: LaunchSiteOption[];
   recon_route: ReconRoute | null;
   metrics: Metrics | null;
   frames: Frame[];
