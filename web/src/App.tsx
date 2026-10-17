@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { listScenarios, loadScenario, usingApi, whatIf } from './data';
+import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
 import MapView, { ALL_LAYERS, type Layers } from './MapView';
 import { AlertsTab, alertsUpTo, ExplainTab, LayersTab, MetricsTab, SurveyTab } from './panels';
 import Timeline from './Timeline';
@@ -22,6 +22,7 @@ export default function App() {
   const [alt, setAlt] = useState<{ scenario: Scenario; label: string } | null>(null);
   const [moveSensor, setMoveSensor] = useState<string | null>(null);
   const [busy, setBusy] = useState('');
+  const [source, setSource] = useState<Source>(dataSource());
 
   useEffect(() => {
     listScenarios().then(setList).catch((e) => setErr(String(e)));
@@ -31,7 +32,7 @@ export default function App() {
     let live = true;
     setScenario(null); setErr(''); setT(0); setPlaying(false);
     setSelectedTrack(null); setProposed(null); setAlt(null); setMoveSensor(null);
-    loadScenario(sid).then((s) => live && setScenario(s)).catch((e) => live && setErr(String(e)));
+    loadScenario(sid).then((s) => { if (live) { setScenario(s); setSource(dataSource()); } }).catch((e) => live && setErr(String(e)));
     return () => { live = false; };
   }, [sid]);
 
@@ -83,7 +84,9 @@ export default function App() {
         <select value={sid} onChange={(e) => setSid(e.target.value)} aria-label="Scenario">
           {(list.length ? list : [{ id: sid, name: sid }]).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </select>
-        <span className={`src ${usingApi ? 'live' : ''}`}>{usingApi ? 'Live API' : 'Fixture'}</span>
+        <span className={`src ${source === 'api' ? 'live' : ''}`} title={apiUrl || 'fixtures/scenario_demo.json'}>
+          {source === 'api' ? 'Live API' : source === 'fallback' ? 'API unreachable · fixture' : 'Fixture'}
+        </span>
         {busy && <span className="busy">{busy}</span>}
         {err && <span className="error inline" title={err}>{err}</span>}
         <span className="spacer" />
@@ -106,7 +109,7 @@ export default function App() {
               )}
             </>
           ) : (
-            <div className="loading">{err ? 'Could not load scenario.' : 'Loading scenario…'}</div>
+            <div className="loading">{err ? 'Could not load scenario.' : source === 'fixture' ? 'Loading scenario…' : 'Loading scenario from the API…'}</div>
           )}
         </section>
 

@@ -31,11 +31,14 @@ export function arrowHead(a: Point, b: Point, size = 220): LatLngExpression[] {
 export type Ramp = (v: number) => [number, number, number, number];
 const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k);
 
+// Alpha grows faster than linear so the faint tails of wide Gaussians don't wash over the map.
+const alpha = (v: number, cut: number, max: number) => (v < cut ? 0 : Math.round(255 * max * ((v - cut) / (1 - cut)) ** 1.6));
+
 export const RAMPS: Record<'origin' | 'exposure' | 'forecast', Ramp> = {
   // translucent orange → red
-  origin: (v) => [mix(255, 235, v), mix(170, 30, v), mix(0, 30, v), v < 0.02 ? 0 : Math.round(255 * (0.15 + 0.6 * v))],
+  origin: (v) => [mix(255, 235, v), mix(170, 30, v), mix(0, 30, v), alpha(v, 0.1, 0.8)],
   exposure: (v) => [230, 40, 40, v < 0.02 ? 0 : Math.round(255 * 0.32 * v)],
-  forecast: (v) => [mix(150, 190, v), mix(80, 110, v), 255, v < 0.02 ? 0 : Math.round(255 * (0.12 + 0.55 * v))],
+  forecast: (v) => [mix(150, 190, v), mix(80, 110, v), 255, alpha(v, 0.2, 0.7)],
 };
 
 const cache = new WeakMap<Grid, Map<Ramp, string>>();
