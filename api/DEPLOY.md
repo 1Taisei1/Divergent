@@ -66,3 +66,14 @@ $F tls create --domain divergent-whatif.style.dev --from public --to vm=divergen
 - Move instead of disable: `{"move":{"S3":[4000,5000]}}`.
 - Cleanup: `$F vm delete divergent-whatif`, `$F snapshot delete divergent-base`.
 - For a live what-if with no clone, use `POST /scenario/{id}/whatif`.
+
+## Web app (public): https://divergent.style.dev
+Static build served by `divergent-web.service` (python http.server, port 8080) on the same VM. API responses are gzipped.
+```bash
+(cd web && npm install && npm run build)               # .env.production points at https://divergent-api.style.dev
+tar -cf /tmp/web.tar -C web/dist .
+npx -y freestyle@latest vm scp /tmp/web.tar divergent:/home/ubuntu/web.tar
+npx -y freestyle@latest vm exec divergent -- bash -lc 'rm -rf ~/web && mkdir -p ~/web && tar xf ~/web.tar -C ~/web'
+```
+No restart needed (static files). One-time: the `divergent-web` systemd unit and
+`freestyle tls create --domain divergent.style.dev --from public --to vm=divergent,port=8080`.
