@@ -82,6 +82,16 @@ export interface SensorSuggestion {
   reason: string;
 }
 
+export interface LaunchSiteOption {
+  x: number;
+  y: number;
+  concealment: number;
+  exposure_at_site: number;
+  distance_to_coverage_m: number | null;
+  nearest_enemy_sensor: string | null;
+  reason: string;
+}
+
 export type ReconStatus = 'proposed' | 'approved' | 'flying' | 'aborted' | 'returned';
 
 export interface ReconLogEntry {
@@ -172,6 +182,8 @@ export interface Scenario {
   duration_s: number;
   sensors: Sensor[];
   sensor_suggestion: SensorSuggestion | null;
+  launch_site_grid: Grid | null;
+  launch_site_options: LaunchSiteOption[];
   recon_route: ReconRoute | null;
   metrics: Metrics | null;
   frames: Frame[];

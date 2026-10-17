@@ -64,6 +64,40 @@ const exposure = grid((x, y) =>
   Math.max(...sensors.filter((s) => s.side === 'enemy')
     .map((s) => Math.max(0, 1 - Math.hypot(x - s.x, y - s.y) / s.range_m) ** 0.7)));
 
+// Friendly launch-site concealment (mirrors planning/launch_sites.py): outside coverage, far from its edge,
+// and an unobserved first 1.5 km of flight.
+const HOME = { x: 8500, y: 1000 };
+const launchSites = (() => {
+  const ev = exposure.values, cov = [];
+  ev.forEach((r, row) => r.forEach((v, col) => v >= 0.2 && cov.push([row, col])));
+  const k = Math.round(1500 / CELL);
+  const raw = ev.map((r, row) => r.map((e, col) => {
+    if (e > 0.05) return 0;
+    const standoff = cov.length ? Math.min(...cov.map(([cr, cc]) => Math.hypot(cr - row, cc - col))) * CELL : Infinity;
+    let sum = 0, n = 0;
+    for (let dr = -k; dr <= k; dr++) for (let dc = -k; dc <= k; dc++) {
+      const rr = row + dr, cc = col + dc;
+      if (dr * dr + dc * dc > k * k || rr < 0 || cc < 0 || rr >= GN || cc >= GN) continue;
+      sum += ev[rr][cc]; n++;
+    }
+    return { v: (1 - e) * (0.5 * Math.min(1, standoff / 2000) + 0.5 * (1 - sum / n)), standoff, local: sum / n };
+  }));
+  const max = Math.max(...raw.flat().map((c) => (c ? c.v : 0)));
+  const values = raw.map((r) => r.map((c) => (c ? r2(c.v / max) : 0)));
+  const cells = raw.flatMap((r, row) => r.map((c, col) => ({ c, row, col, x: (col + 0.5) * CELL, y: (row + 0.5) * CELL })))
+    .filter((q) => q.c && values[q.row][q.col] > 0 && dist(q, HOME) <= 4000)
+    .sort((a, b) => values[b.row][b.col] - values[a.row][a.col] || dist(a, HOME) - dist(b, HOME));
+  const options = [];
+  for (const q of cells) {
+    if (options.length >= 3) break;
+    if (options.some((o) => dist(o, q) < 1000)) continue;
+    options.push({ x: q.x, y: q.y, concealment: values[q.row][q.col], exposure_at_site: r2(ev[q.row][q.col]),
+      distance_to_coverage_m: Math.round(q.c.standoff), nearest_enemy_sensor: 'ES2',
+      reason: `${(q.c.standoff / 1000).toFixed(1)} km outside ES2 coverage; the first 1.5 km of flight is ${q.c.local < 0.01 ? 'unobserved' : `${Math.round(q.c.local * 100)}% exposed`}.` });
+  }
+  return { grid: { cell_m: CELL, width: GN, height: GN, values }, options };
+})();
+
 const routes = [
   { id: 'F1', waypoints: [{ x: 8500, y: 1000 }, { x: 6500, y: 4000 }, { x: 5000, y: 6500 }],
     risk: 0.71, risk_level: 'high', exposed_by: ['ES2'],
@@ -160,6 +194,7 @@ const scenario = {
   duration_s: N_FRAMES, sensors,
   sensor_suggestion: { x: 3000, y: 2500, uncertainty_reduction: 0.31,
     reason: 'Covers the gap south-west of S3 where T1 and T2 originate.' },
+  launch_site_grid: launchSites.grid, launch_site_options: launchSites.options,
   recon_route: { id: 'R1', waypoints: [{ x: 8500, y: 1000 }, { x: 5500, y: 2000 }, { x: 3500, y: 2600 },
     { x: 2600, y: 3400 }, { x: 8500, y: 1000 }],
     info_gain: 0.58, risk: 0.21, geofence: { x_min: 2100, x_max: 9000, y_min: 500, y_max: 3900 },

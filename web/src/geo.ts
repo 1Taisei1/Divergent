@@ -34,11 +34,13 @@ const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k);
 // Alpha grows faster than linear so the faint tails of wide Gaussians don't wash over the map.
 const alpha = (v: number, cut: number, max: number) => (v < cut ? 0 : Math.round(255 * max * ((v - cut) / (1 - cut)) ** 1.6));
 
-export const RAMPS: Record<'origin' | 'exposure' | 'forecast', Ramp> = {
+export const RAMPS: Record<'origin' | 'exposure' | 'forecast' | 'launch', Ramp> = {
   // translucent orange → red
   origin: (v) => [mix(255, 235, v), mix(170, 30, v), mix(0, 30, v), alpha(v, 0.1, 0.8)],
   exposure: (v) => [230, 40, 40, v < 0.02 ? 0 : Math.round(255 * 0.32 * v)],
   forecast: (v) => [mix(150, 190, v), mix(80, 110, v), 255, alpha(v, 0.2, 0.7)],
+  // our safest launch areas: faint green, only the well-hidden band
+  launch: (v) => [40, 220, 130, alpha(v, 0.5, 0.35)],
 };
 
 const cache = new WeakMap<Grid, Map<Ramp, string>>();

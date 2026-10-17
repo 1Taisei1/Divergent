@@ -5,7 +5,8 @@ import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
 import type { Alert, ReconRoute, Scenario } from './types';
 
-export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l: Layers) => void }) {
+export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario; layers: Layers; setLayers: (l: Layers) => void }) {
+  const sites = scenario.launch_site_options ?? [];
   return (
     <div className="panel">
       {(Object.keys(LAYERS) as LayerKey[]).map((k) => (
@@ -22,7 +23,19 @@ export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l
         <div><i style={{ background: '#ffe14d' }} /> Track</div>
         <div><i style={{ background: '#ff8a3d' }} /> Likely launch area</div>
         <div><i style={{ background: '#a070ff' }} /> Next-launch forecast</div>
+        <div><i style={{ background: '#28dc82' }} /> Our safe launch area</div>
       </div>
+      {sites.length > 0 && (
+        <div className="sites">
+          <div className="alert-meta">Our safest launch sites (hardest for enemy sensors to trace back)</div>
+          {sites.map((o, i) => (
+            <div key={i} className="site-row">
+              <span className="launch-site small">{i + 1}</span>
+              <div><b>({o.x}, {o.y}) m · {pct(o.concealment)}</b><div className="hint">{o.reason}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
       <p className="hint">Click a track to see which sensors fed it. Right-click an allied sensor for what-if.</p>
     </div>
   );
