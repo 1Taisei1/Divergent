@@ -4,7 +4,7 @@
 import type { Layer, PickingInfo } from '@deck.gl/core';
 import { ColumnLayer, IconLayer, LineLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MLMap, type MapMouseEvent } from 'maplibre-gl';
+import maplibregl, { type GeoJSONSource, type Map as MLMap, type MapMouseEvent } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { headingDeg, pad3, speedMs, STEP_MS } from '../drones';
@@ -16,7 +16,8 @@ import {
   IMAGERY_URL, loadElevation, toLngLat, type ElevationFn,
 } from './geo3d';
 import { coverageLayers } from './coverage';
-import { blend, confidenceGrid, EMPTY_IMAGE, hasValues, heatImage, LEGEND_SWATCHES } from './heat';
+import { blend, confidenceGrid, hasValues, heatFrame, LEGEND_SWATCHES, type HeatFrame } from './heat';
+import { addHeatLayers, setHeat } from './heatTiles';
 import { planRoutes } from './route';
 
 export type OpsMode = 'enemy' | 'launch' | 'route';
@@ -114,7 +115,6 @@ export default function OpsMap(p: Props) {
   // Latest values for map event handlers registered once.
   const live = useRef({ mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s });
   live.current = { mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s };
-  const lastHeat = useRef('');
 
   // ---- map + overlay, created once ----
   useEffect(() => {
@@ -177,8 +177,7 @@ export default function OpsMap(p: Props) {
       map.addSource('box', { type: 'geojson', data: fc([line(ring)]) });
       map.addLayer({ id: 'box', type: 'line', source: 'box', paint: { 'line-color': '#eeeae2', 'line-opacity': 0.55, 'line-width': 1.5 } });
 
-      map.addSource('heat', { type: 'image', url: EMPTY_IMAGE, coordinates: BOX_CORNERS });
-      map.addLayer({ id: 'heat', type: 'raster', source: 'heat', paint: { 'raster-opacity': 0.92, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } });
+      addHeatLayers(map); // tiled so it drapes over the terrain
 
       for (const id of ['rings', 'origins', 'teams', 'sites', 'routes', 'recon']) map.addSource(id, { type: 'geojson', data: fc([]) });
       map.addLayer({ id: 'rings-fill', type: 'fill', source: 'rings', paint: { 'fill-color': ['match', ['get', 'side'], 'allied', '#5aa9ff', '#f0332b'], 'fill-opacity': ['case', ['get', 'active'], 0.05, 0.015] } });
@@ -301,16 +300,11 @@ export default function OpsMap(p: Props) {
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !frame) return;
-    const heat = map.getSource('heat') as ImageSource;
-    let url = EMPTY_IMAGE;
-    if (mode === 'enemy' && enemyHeat) url = heatImage(enemyHeat, 1, 320, 1.5);
-    if (mode === 'launch' && hasValues(s.launch_site_grid)) url = heatImage(s.launch_site_grid);
-    if (mode === 'route' && threat) url = heatImage(threat);
-    map.setPaintProperty('heat', 'raster-opacity', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
-    if (url !== lastHeat.current) { // an update while one is decoding aborts it, so skip no-op updates
-      lastHeat.current = url;
-      heat.updateImage({ url, coordinates: BOX_CORNERS });
-    }
+    let heat: HeatFrame | null = null;
+    if (mode === 'enemy' && enemyHeat) heat = heatFrame(enemyHeat, 1, 320, 1.5);
+    if (mode === 'launch' && hasValues(s.launch_site_grid)) heat = heatFrame(s.launch_site_grid);
+    if (mode === 'route' && threat) heat = heatFrame(threat);
+    setHeat(map, heat?.canvas ?? null, heat?.key ?? '', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
 
     const set = (id: string, features: GeoJSON.Feature[]) => (map.getSource(id) as GeoJSONSource).setData(fc(features));
     set('rings', []); // sensor coverage is drawn in 3D by coverage.ts

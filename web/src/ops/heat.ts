@@ -35,11 +35,10 @@ export function ramp(v: number): [number, number, number, number] {
   return [r, g, b, a * 255];
 }
 
-export const EMPTY_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 export const hasValues = (g: MaybeGrid | null | undefined): g is Grid => isGrid(g) && g.values.some((r) => r.some((v) => v > 0.02));
 
-const cache = new WeakMap<Grid, Map<number, string>>();
+const cache = new WeakMap<Grid, Map<number, HeatFrame>>();
 
 // Separable Gaussian blur (sigma in cells), rescaled so the peak stays where it was. Display smoothing only.
 function blur(values: number[][], sigma: number): number[][] {
@@ -60,9 +59,11 @@ function blur(values: number[][], sigma: number): number[][] {
   return after > 0 ? out.map((row) => row.map((v) => (v * before) / after)) : out;
 }
 
-// Grid (row 0 = south) → PNG data URL (row 0 = north), values multiplied by `scale` and clipped to 0..1.
-// `spread` (cells) softens small blobs so they read at overview zoom.
-export function heatImage(g: Grid, scale = 1, size = 320, spread = 0): string {
+// Grid (row 0 = south) → canvas (row 0 = north), values multiplied by `scale` and clipped to 0..1.
+// `spread` (cells) softens small blobs so they read at overview zoom. `key` (a PNG data URL) identifies the contents,
+// so callers can skip work when a recomputed grid renders identically.
+export type HeatFrame = { key: string; canvas: HTMLCanvasElement };
+export function heatFrame(g: Grid, scale = 1, size = 320, spread = 0): HeatFrame {
   const key = Math.round(scale * 1000) * 100 + Math.round(spread * 10);
   const hit = cache.get(g)?.get(key);
   if (hit) return hit;
@@ -86,10 +87,10 @@ export function heatImage(g: Grid, scale = 1, size = 320, spread = 0): string {
     }
   }
   ctx.putImageData(img, 0, 0);
-  const url = c.toDataURL();
+  const frame = { key: c.toDataURL(), canvas: c };
   if (!cache.has(g)) cache.set(g, new Map());
-  cache.get(g)!.set(key, url);
-  return url;
+  cache.get(g)!.set(key, frame);
+  return frame;
 }
 
 // Enemy-tab heat: each origin estimate is a Gaussian (sigma = its uncertainty radius, at least MIN_SIGMA_M) whose height
