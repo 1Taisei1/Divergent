@@ -22,19 +22,19 @@ Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
     detection is within its sensor's range.
   - **Push to `main` by 12:00 and tell Leo and Ali.**
 
-- [ ] **3. `api/pipeline.py`** — `build_scenario(scenario_id, overrides=None, recon=None) -> dict`:
+- [x] **3. `api/pipeline.py`** — `build_scenario(scenario_id, overrides=None, recon=None) -> dict`:
   sim → `analysis.tracker.run` → `analysis.origin.run` → `analysis.launch_teams.run` → `analysis.forecast.run` →
   `planning.exposure.run` → `analysis.sensor_suggest.run` → assemble one Frame per t → `analysis.alerts.run` → merge alerts →
   `planning.metrics.run`. Import each module inside `try/except` and fall back to empty values, so a missing or broken
   module never breaks the API. Log which modules loaded.
 
-- [ ] **4. `api/main.py`** — FastAPI with CORS `*`: `GET /health`, `GET /scenarios`, `GET /scenario/{id}`. Build all presets at
+- [x] **4. `api/main.py`** — FastAPI with CORS `*`: `GET /health`, `GET /scenarios`, `GET /scenario/{id}`. Build all presets at
   startup and cache them in memory. Run it and curl each route.
 
 - [ ] **5. Deploy to Freestyle.** Follow their docs: run `uvicorn api.main:app --host 0.0.0.0 --port 8000` in a VM and expose the
   preview URL. Send the URL to Neil for `VITE_API_URL`. Write the exact commands into `api/DEPLOY.md`.
 
-- [ ] **6. Presets.** `single` (one team, one drone), `swarm` (one team launching 6 drones at once at t=20), `sparse` (only S1
+- [x] **6. Presets.** `single` (one team, one drone), `swarm` (one team launching 6 drones at once at t=20), `sparse` (only S1
   and S4 active).
 
 - [ ] **7. What-if.** `POST /scenario/{id}/whatif` with body `{sensor_id, action: "disable"|"move", x?, y?}` → rebuild with
