@@ -38,6 +38,7 @@ const GRID_LINES = Array.from({ length: MAP_SIZE / 1000 + 1 }, (_, i) => i * 100
 const plusIcon = L.divIcon({ className: '', html: '<div class="suggest-plus">+</div>', iconSize: [40, 40], iconAnchor: [20, 20] });
 const siteIcon = (n: number) =>
   L.divIcon({ className: '', html: `<div class="launch-site">${n}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+const pinIcon = L.divIcon({ className: '', html: '<div class="site-pin"></div>', iconSize: [26, 34], iconAnchor: [13, 32] });
 const droneIcon = L.divIcon({ className: '', html: '<div class="recon-diamond"></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
 
 export function frameAt(s: Scenario, t: number): Frame | undefined {
@@ -114,7 +115,8 @@ export default function MapView(p: Props) {
             <ImageOverlay url={gridImage(s.launch_site_grid, RAMPS.launch)} bounds={gridBounds(s.launch_site_grid)} />
           )}
           {on.originHeat && hasHeat(frame?.origin_heatmap) && (
-            <ImageOverlay url={gridImage(frame.origin_heatmap, RAMPS.origin)} bounds={gridBounds(frame.origin_heatmap)} />
+            <ImageOverlay url={gridImage(frame.origin_heatmap, RAMPS.origin)} bounds={gridBounds(frame.origin_heatmap)}
+              opacity={frame.confirmed_sites?.length ? 0.35 : 1} />
           )}
         </Pane>
 
@@ -217,7 +219,9 @@ export default function MapView(p: Props) {
                 <Polygon key={i} positions={arrowHead(h[i], pt)} pathOptions={{ color: '#ff8a3d', fillColor: '#ff8a3d', fillOpacity: 1, weight: 1 }} interactive={false} />
               ))}
               <CircleMarker center={llp(h[h.length - 1])} radius={3} interactive={false} pathOptions={{ opacity: 0, fillOpacity: 0 }}>
-                <Tooltip permanent direction="bottom" offset={[0, 10]} className="map-label">{`${lt.id} · ${h.length} site${h.length > 1 ? 's' : ''}`}</Tooltip>
+                <Tooltip permanent direction="bottom" offset={[0, 10]} className="map-label">
+                  {`${lt.id} · ${lt.confirmed ? 'confirmed' : `${h.length} site${h.length > 1 ? 's' : ''}`}`}
+                </Tooltip>
               </CircleMarker>
             </span>
           );
@@ -246,6 +250,18 @@ export default function MapView(p: Props) {
             <Polyline positions={p.reconRoute.waypoints.map(llp)} pathOptions={{ color: '#ffffff', weight: 2.5, dashArray: '10 8', opacity: 0.85 }} interactive={false} />
           </>
         )}
+        {on.origins && frame?.confirmed_sites?.map((c) => (
+          <span key={`cs-${c.team_id}`}>
+            <Circle center={ll(c.x, c.y)} radius={Math.max(c.radius_m, 60)} interactive={false}
+              pathOptions={{ color: '#ffffff', weight: 2, fillColor: '#ffffff', fillOpacity: 0.25 }} />
+            <Marker position={ll(c.x, c.y)} icon={pinIcon}>
+              <Tooltip permanent direction="right" offset={[12, -18]} className="map-label confirmed-label">
+                {`${c.team_id} site confirmed ±${Math.round(c.radius_m)} m`}
+              </Tooltip>
+            </Marker>
+          </span>
+        ))}
+
         {on.recon && frame?.recon && (
           <Marker position={ll(frame.recon.x, frame.recon.y)} icon={droneIcon}>
             <Tooltip direction="top" offset={[0, -10]}>{`Survey drone ${frame.recon.route_id} · ${frame.recon.status} · risk ${pct(frame.recon.risk_now)}`}</Tooltip>
