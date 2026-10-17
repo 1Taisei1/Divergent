@@ -61,7 +61,7 @@ def test_single_origin_has_zero_step():
 
 def test_grid_for_every_second_and_zeros_without_teams():
     grids = forecast.run(RAW, {50: [_team((20, 3000, 5000))]})
-    assert sorted(grids) == list(range(RAW["duration_s"]))
+    assert sorted(grids) == list(range(RAW["duration_s"] + 1))
     for t, g in grids.items():
         assert (g["cell_m"], g["width"], g["height"]) == (100, 100, 100)
         assert from_grid(g).shape == (100, 100)

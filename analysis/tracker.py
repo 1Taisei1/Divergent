@@ -54,7 +54,7 @@ def run(raw):
     tracks = {}  # drone_id -> {id, kf, t (filter time), last_det_t, sensor_ids, points}
     tracks_by_t = {}
 
-    for t in range(raw["duration_s"]):
+    for t in range(raw["duration_s"] + 1):  # frames t = 0..duration inclusive, like sim/generate.py
         by_drone = {}
         for d in raw["detections_by_t"].get(t, []):
             if d["clutter"] or d["truth_drone_id"] is None:
