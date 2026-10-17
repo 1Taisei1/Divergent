@@ -35,6 +35,19 @@
 .ops.is-pv .ops-map { visibility: hidden; }
 .ops.is-pv .pv { top: 60px; border-top: 1px solid var(--line-2); }
 
+/* NATO affiliation colours (symbols.ts): friend blue, hostile red, neutral green, unknown yellow */
+.ops { --nato-friend: #5aa9ff; --nato-hostile: #ff3b30; --nato-neutral: #3fd68a; --nato-unknown: #ffd23f; }
+.ops-title.unknown { color: var(--nato-unknown); }
+.ops-list b.unknown { color: var(--nato-unknown); }
+.ops-list button { align-items: center; }
+.ops-list .ok { font-style: normal; font-weight: 800; color: var(--ok, var(--nato-neutral)); }
+
+/* Legend: symbol key and what the autonomous survey has fed into this picture */
+.ops-nato { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.ops-nato span { display: inline-flex; align-items: center; gap: 5px; }
+.ops-nato i { display: inline-flex; width: 16px; height: 16px; }
+.ops-fused { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: var(--nato-friend); }
+
 /* Bigger type on the small HUD pieces (projector) */
 .ops-ramp { font-size: 13px; }
 .ops-data dt { font-size: 13px; }
