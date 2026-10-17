@@ -181,15 +181,23 @@ export default function MapView(p: Props) {
           );
         })}
 
-        {on.origins && frame?.origins.map((o) => (
-          <span key={o.track_id}>
-            <Circle center={llp(o.peak)} radius={o.radius_m} interactive={false}
-              pathOptions={{ color: '#ff8a3d', weight: 1.5, dashArray: '4 6', fillOpacity: 0, opacity: sel && sel.id !== o.track_id ? 0.2 : 0.9 }} />
-            <CircleMarker center={llp(o.peak)} radius={5} interactive={false} pathOptions={{ color: '#fff', weight: 1.5, fillColor: '#ff5a1f', fillOpacity: 1 }}>
-              <Tooltip permanent direction="left" offset={[-8, 0]} className="map-label origin-label">{`${o.track_id} · ${pct(o.confidence)}`}</Tooltip>
-            </CircleMarker>
-          </span>
-        ))}
+        {on.origins && frame?.origins.map((o) => {
+          // Permanent labels only for live (or selected) tracks; lost tracks' origins keep a hover label so they don't pile up.
+          const lost = frame.tracks.find((x) => x.id === o.track_id)?.status === 'lost';
+          const isSel = sel?.id === o.track_id;
+          const faded = (sel && !isSel) || (!sel && lost);
+          return (
+            <span key={o.track_id}>
+              <Circle center={llp(o.peak)} radius={o.radius_m} interactive={false}
+                pathOptions={{ color: '#ff8a3d', weight: 1.5, dashArray: '4 6', fillOpacity: 0, opacity: faded ? 0.25 : 0.9 }} />
+              <CircleMarker center={llp(o.peak)} radius={5} pathOptions={{ color: '#fff', weight: 1.5, fillColor: '#ff5a1f', fillOpacity: faded ? 0.4 : 1, opacity: faded ? 0.4 : 1 }}>
+                <Tooltip key={String(!lost || isSel)} permanent={!lost || isSel} direction="left" offset={[-8, 0]} className="map-label origin-label">
+                  {`${o.track_id} · ${pct(o.confidence)}`}
+                </Tooltip>
+              </CircleMarker>
+            </span>
+          );
+        })}
 
         {on.launchTeams && frame?.launch_teams.map((lt) => {
           const h = lt.origin_history;
