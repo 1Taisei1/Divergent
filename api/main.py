@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.pipeline import build_scenario
-from sim.generate import PRESETS
+from planning import recon
+from sim.generate import PRESETS, generate
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="c0mpiled-14 API (simulated data)")
@@ -115,3 +116,79 @@ def explain(sid: str, t: int = 0):
         raise HTTPException(400, "t out of range")
     s = _summary(frames[t])
     return {"text": _llm(s) or _template(s)}
+
+
+# Recon (surveillance only). Nothing flies without approve + a named operator; guardrails live in planning/recon.py.
+RECON = {}  # sid -> latest ReconRoute
+
+
+class ReconApprove(BaseModel):
+    route_id: str
+    operator: str
+    t: int
+
+
+class ReconAbort(BaseModel):
+    route_id: str
+    t: int
+
+
+def _frame_at(sid, t):
+    frames = _get(sid)["frames"]
+    if not 0 <= t < len(frames):
+        raise HTTPException(400, "t out of range")
+    return frames[t]
+
+
+def _route(sid, route_id):
+    route = RECON.get(sid)
+    if not route or route["id"] != route_id:
+        raise HTTPException(404, f"no proposed survey route {route_id}; call recon/propose first")
+    return route
+
+
+def _fly(sid, route, abort_t=None):
+    """Fly an approved route from its approve time and return the recomputed Scenario (not cached)."""
+    raw = generate(sid)
+    grid = _frame_at(sid, route["approved_at"])["exposure_grid"]
+    try:
+        states, detections, *rest = recon.fly(raw, route, route["approved_at"], grid, abort_t)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    flown = {**route, "log": rest[0] if rest else route["log"]}
+    events = [e["event"] for e in flown["log"]]
+    flown["status"] = "aborted" if "aborted" in events else "returned" if "returned" in events else "flying"
+    return build_scenario(sid, recon={"route": flown, "states": states, "detections": detections})
+
+
+@app.post("/scenario/{sid}/recon/propose")
+def recon_propose(sid: str, t: int = 0):
+    frame = _frame_at(sid, t)
+    route = recon.propose(generate(sid), frame, frame["exposure_grid"])
+    RECON[sid] = route
+    return route
+
+
+@app.post("/scenario/{sid}/recon/approve")
+def recon_approve(sid: str, body: ReconApprove):
+    operator = body.operator.strip()
+    if not operator:
+        raise HTTPException(400, "an operator name is required to approve a survey")
+    _frame_at(sid, body.t)
+    route = _route(sid, body.route_id)
+    route = {**route, "status": "approved", "approved_by": operator, "approved_at": body.t,
+             "log": [e for e in route["log"] if e["event"] == "proposed"]
+             + [{"t": body.t, "event": "approved", "by": operator}]}
+    RECON[sid] = route
+    return _fly(sid, route)
+
+
+@app.post("/scenario/{sid}/recon/abort")
+def recon_abort(sid: str, body: ReconAbort):
+    route = _route(sid, body.route_id)
+    if route["status"] != "approved":
+        raise HTTPException(400, "survey is not approved, nothing to abort")
+    _frame_at(sid, body.t)
+    if body.t < route["approved_at"]:
+        raise HTTPException(400, "abort time is before the approve time")
+    return _fly(sid, route, abort_t=body.t)
