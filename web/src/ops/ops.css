@@ -1,0 +1,45 @@
+/* 3D ops view overrides. Imported right after maplibre-gl.css so equal-specificity rules win the cascade. */
+.ops .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line-2); border-radius: 0; box-shadow: none; }
+.ops .maplibregl-ctrl-group:not(:empty) { box-shadow: none; }
+.ops .maplibregl-ctrl-group button { width: 34px; height: 34px; border-radius: 0; }
+.ops .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line); }
+.ops .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.92); }
+.ops .maplibregl-ctrl-group button:hover { background: var(--panel-3); }
+.ops .maplibregl-ctrl.maplibregl-ctrl-attrib,
+.ops .maplibregl-ctrl-attrib.maplibregl-compact { background: oklch(0.13 0.005 60 / 0.85); color: var(--muted); border-radius: 0; font: 500 12px/1.4 var(--mono); }
+.ops .maplibregl-ctrl-attrib a { color: var(--muted); }
+.ops .maplibregl-ctrl-attrib-button { border-radius: 0; filter: invert(0.85); }
+.ops .maplibregl-ctrl-scale { background: oklch(0.13 0.005 60 / 0.85); color: var(--muted); border: 2px solid var(--line-2); border-top: 0; border-radius: 0; font: 700 12px/1.4 var(--mono); }
+.ops .maplibregl-canvas:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+
+/* Numbered mission tabs */
+.ops-mode-code { display: inline-block; margin-right: 8px; padding: 0 4px; font-size: 12px; color: var(--faint); border: 1px solid var(--line); }
+.ops-modes button.on .ops-mode-code { color: var(--hazard); border-color: var(--hazard); }
+.ops-modes button:focus-visible { outline: 2px solid var(--text); outline-offset: -3px; }
+
+/* Area-of-operations strip: says plainly that the real terrain placement is illustrative */
+.ops-ao { position: absolute; z-index: 5; top: 16px; right: 16px; transform: translateY(34px); max-width: 46ch; padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); background: oklch(0.13 0.005 60 / 0.85); border: 1px solid var(--line); text-align: right; pointer-events: none; }
+.ops-ao b { color: var(--text); }
+.ops .maplibregl-ctrl-top-right { top: 84px; }
+.ops-camera { top: 204px; }
+
+/* Viewport corner brackets (same device as the 2D map), under the floating panels */
+.ops .hud-frame { inset: 6px; z-index: 4; }
+.ops .hud-frame i { border-color: oklch(0.93 0.01 80 / 0.55); }
+
+/* Tab 05 provenance: the lineage view replaces the map below the tab strip (the map stays mounted, just not drawn) */
+.ops.is-pv { background: var(--bg); }
+.ops.is-pv .ops-map { visibility: hidden; }
+.ops.is-pv .pv { top: 60px; border-top: 1px solid var(--line-2); }
+
+/* Bigger type on the small HUD pieces (projector) */
+.ops-ramp { font-size: 13px; }
+.ops-data dt { font-size: 13px; }
+
+@media (max-width: 700px) {
+  .ops-modes { overflow-x: auto; scrollbar-width: thin; }
+  .ops-ao { display: none; }
+  .ops .maplibregl-ctrl-top-right { display: none; }
+  .ops-camera { top: auto; bottom: 46%; right: 8px; } /* stay clear of the bottom sheet card */
+  .ops-card { max-height: 34%; }
+}

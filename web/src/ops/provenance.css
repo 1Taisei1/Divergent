@@ -1,0 +1,241 @@
+/* PROVENANCE tab: swimlane timelines of every datum the pipeline made, plus a lineage inspector.
+   Fills its (positioned) parent. Tokens come from index.css :root. No animation, so nothing to gate on reduced motion. */
+
+.pv {
+  --lab: 156px; /* label column, shared by every lane so the cursor lines up */
+  --g: var(--muted);
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "head head" "lanes insp";
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 var(--mono);
+}
+.pv button { font: inherit; color: inherit; }
+.pv button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.pv .g-risk { --g: var(--hazard); }
+.pv .g-origin { --g: var(--origin); }
+.pv .g-site { --g: var(--text); }
+.pv .g-track { --g: var(--muted); }
+
+/* Header strip */
+.pv-head {
+  grid-area: head;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 32px;
+  padding: 12px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.pv-title h2 { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: 0.14em; }
+.pv-title p { margin: 2px 0 0; color: var(--muted); }
+.pv-stats { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 0; }
+.pv-stats div { min-width: 0; }
+.pv-stats dt { color: var(--muted); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.pv-stats dd { margin: 0; font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.pv-stats dd small { font-size: 13px; font-weight: 400; color: var(--muted); }
+.pv-now dd { color: var(--origin); }
+
+/* Lanes */
+.pv-scroll { grid-area: lanes; min-width: 0; min-height: 0; overflow: auto; }
+.pv-lanes { position: relative; min-width: 560px; padding-bottom: 24px; }
+.pv-lane-h {
+  margin: 0;
+  padding: 16px 10px 6px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.pv-lane-h small { margin-left: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+
+.pv-row, .pv-alerts { display: grid; grid-template-columns: var(--lab) minmax(0, 1fr); }
+.pv-row { height: 26px; }
+.pv-plot {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+  background: color-mix(in oklab, var(--panel) 55%, var(--bg));
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 55%, transparent);
+}
+
+.pv-lab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pv-lab b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.pv-lab-2 { display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 100%; line-height: 1.2; }
+.pv-lab-2 > span { display: flex; justify-content: space-between; gap: 8px; }
+.pv-lab-btn { background: none; border: 0; text-align: left; cursor: pointer; }
+.pv-lab-btn:hover { background: var(--panel-2); color: var(--text); }
+.pv-lab-btn.on { background: var(--panel-3); color: var(--text); }
+.pv-dot { flex: none; width: 9px; height: 9px; background: var(--c, var(--muted)); }
+.pv-side-allied { --c: var(--allied); }
+.pv-side-enemy { --c: var(--hazard); }
+
+/* Shared axis */
+.pv-ruler { position: sticky; top: 0; z-index: 4; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line-2); }
+.pv-ruler .pv-plot { background: none; border-bottom: 0; }
+.pv-ruler .pv-lab { color: var(--faint); font-weight: 400; text-transform: uppercase; letter-spacing: 0.08em; }
+.pv-tick { position: absolute; top: 0; bottom: 0; width: 0; }
+.pv-tick::before { content: ''; position: absolute; bottom: 0; width: 1px; height: 6px; background: var(--line-2); }
+.pv-tick em { position: absolute; top: 6px; transform: translateX(-50%); font-style: normal; color: var(--faint); font-variant-numeric: tabular-nums; }
+.pv-curtag { position: absolute; top: 4px; transform: translateX(-50%); padding: 0 6px; background: var(--text); color: var(--bg); font-weight: 800; line-height: 22px; font-variant-numeric: tabular-nums; }
+
+/* Cursor, grid and the not-yet-computed future, drawn over every plot column */
+.pv-overlay { position: absolute; top: 0; bottom: 0; left: var(--lab); right: 0; z-index: 1; pointer-events: none; }
+.pv-grid { position: absolute; top: 32px; bottom: 0; width: 1px; background: var(--line); opacity: 0.45; }
+.pv-future { position: absolute; top: 32px; bottom: 0; right: 0; background: color-mix(in oklab, var(--bg) 55%, transparent); }
+.pv-cursor { position: absolute; top: 32px; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); z-index: 3; }
+
+/* Sensors: one thin tick row each, ticks drawn as two paths (real, clutter) */
+.pv-ticks { position: absolute; inset: 0; width: 100%; height: 100%; shape-rendering: crispEdges; }
+.pv-ticks path { fill: none; stroke-width: 0.7; }
+.pv-t-real { stroke: var(--c); }
+.pv-t-clutter { stroke: var(--faint); }
+
+/* Bars (tracks, recon spans) */
+.pv-bar {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  z-index: 2;
+  min-width: 4px;
+  padding: 0 6px;
+  border: 0;
+  background: var(--hazard);
+  color: var(--hazard-ink);
+  font-weight: 800;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.pv-bar.lost { top: 50%; bottom: auto; height: 2px; margin-top: -1px; padding: 0; background: var(--faint); font-size: 0; }
+.pv-bar.recon { background: var(--allied); color: var(--bg); text-transform: uppercase; letter-spacing: 0.06em; }
+.pv-bar.recon.proposed { background: none; outline: 1px solid var(--allied); outline-offset: -1px; color: var(--allied); }
+.pv-bar.recon.aborted { background: var(--hazard); color: var(--hazard-ink); }
+.pv-bar.recon.returned { background: var(--ok); color: var(--bg); }
+
+/* Markers: an 18px hit area around a 9px glyph */
+.pv-mk {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.pv-mk::before { content: ''; position: absolute; left: 50%; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; background: var(--c, var(--g)); box-sizing: border-box; }
+.pv-mk:hover::before, .pv-mk.on::before { outline: 2px solid var(--text); outline-offset: 2px; }
+
+.pv-origin { --c: var(--origin); }
+.pv-mk.pv-origin:not(.solid)::before { background: var(--bg); border: 2px solid var(--c); }
+.pv-mk.pv-origin.big::before { width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; }
+.pv-span { position: absolute; top: 50%; height: 2px; margin-top: -1px; z-index: 1; pointer-events: none; }
+.pv-span.pv-origin { background: color-mix(in oklab, var(--origin) 55%, transparent); }
+.pv-span.pv-team { height: 14px; margin-top: -7px; background: color-mix(in oklab, var(--origin) 16%, transparent); outline: 1px solid color-mix(in oklab, var(--origin) 45%, transparent); outline-offset: -1px; }
+
+.pv-team-mk.found { --c: var(--text); }
+.pv-team-mk.found::before { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; }
+.pv-team-mk.reloc { --c: var(--origin); }
+.pv-team-mk.reloc::before { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; transform: rotate(45deg); }
+.pv-team-mk.same { --c: var(--muted); }
+.pv-team-mk.same::before { width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; }
+
+.pv-pct { position: absolute; top: 50%; z-index: 2; transform: translate(12px, -50%); color: var(--origin); font-weight: 800; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums; }
+.pv-pct.flip { transform: translate(calc(-100% - 12px), -50%); }
+.pv-pct.ok { color: var(--ok); }
+
+/* Forecast sparkline */
+.pv-fc { height: 52px; }
+.pv-spark { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pv-spark path { fill: none; stroke-width: 1.5; }
+.pv-peak { stroke: var(--text); }
+.pv-spread { stroke: var(--faint); }
+.pv-fc-mk { --c: var(--origin); }
+.pv-fc-mk::before { transform: rotate(45deg); }
+
+/* Alerts: four stacked sub-rows by kind group, label column carries the matching legend */
+.pv-alerts { height: 84px; }
+.pv-alab { display: grid; grid-template-rows: repeat(4, 1fr); padding: 0 10px; }
+.pv-g { display: flex; align-items: center; gap: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.pv-g::before { content: ''; flex: none; width: 9px; height: 9px; background: var(--g); }
+.pv-alert { top: auto; }
+
+/* Survey lane */
+.pv-log { --c: var(--allied); }
+.pv-log::before { width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; }
+.pv-site { --c: var(--ok); }
+.pv-site::before { width: 12px; height: 12px; margin: -6px 0 0 -6px; transform: rotate(45deg); }
+.pv-none, .pv-empty, .pv-more { color: var(--faint); }
+.pv-none { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.pv-empty, .pv-more { margin: 6px 10px; }
+
+/* Inspector */
+.pv-insp { grid-area: insp; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--line); }
+.pv-insp-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+.pv-insp-bar button, .pv-future-note button { padding: 3px 10px; background: none; border: 1px solid var(--line-2); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; }
+.pv-insp-bar button:hover, .pv-future-note button:hover { background: var(--panel-3); }
+.pv-insp-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
+.pv-insp .pv-empty { padding: 10px 16px; margin: 0; }
+.pv-insp-body .pv-empty { padding: 0; }
+
+.pv-chip { display: inline-block; padding: 1px 8px; background: var(--origin); color: var(--bg); font-weight: 800; letter-spacing: 0.1em; }
+.pv-subject h3 { margin: 8px 0 2px; font-size: 16px; line-height: 1.3; word-break: break-word; }
+.pv-subject p { margin: 0; color: var(--muted); }
+.pv-future-note { margin-top: 8px !important; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; color: var(--origin) !important; }
+.pv-insp h4 { margin: 20px 0 10px; color: var(--faint); font-size: 13px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+
+.pv-chain { list-style: none; margin: 0; padding: 0; }
+.pv-step { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); padding-bottom: 16px; }
+.pv-step::before { content: ''; position: absolute; left: 7px; top: 16px; bottom: 0; width: 1px; background: var(--line-2); }
+.pv-step:last-child { padding-bottom: 0; }
+.pv-step:last-child::before { display: none; }
+.pv-node { position: relative; display: block; width: 9px; height: 9px; margin: 5px 0 0 3px; background: var(--panel); border: 2px solid var(--line-2); box-sizing: border-box; }
+.pv-step.out .pv-node { background: var(--origin); border-color: var(--origin); }
+.pv-step-body { min-width: 0; }
+.pv-step-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+.pv-step-head span { color: var(--faint); font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+.pv-step-head code { color: var(--ok); font: inherit; word-break: break-all; }
+.pv-step-title { display: block; margin: 2px 0 0; padding: 0; background: none; border: 0; text-align: left; font-size: 14px; font-weight: 800; line-height: 1.35; word-break: break-word; }
+button.pv-step-title { cursor: pointer; }
+button.pv-step-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.pv-step-body p { margin: 4px 0 0; color: var(--muted); }
+
+.pv-rows, .pv-uses { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--line); }
+.pv-uses { margin-top: 0; }
+.pv-rows li + li, .pv-uses li + li { border-top: 1px solid var(--line); }
+.pv-rows li > *, .pv-uses li > * { display: flex; flex-wrap: wrap; gap: 2px 10px; width: 100%; padding: 5px 10px; background: none; border: 0; text-align: left; }
+.pv-rows li > button, .pv-uses li > button { cursor: pointer; }
+.pv-rows li > button:hover, .pv-uses li > button:hover { background: var(--panel-3); }
+.pv-rows b { font-variant-numeric: tabular-nums; }
+.pv-rows span { color: var(--muted); }
+.pv-uses b { color: var(--origin); font-variant-numeric: tabular-nums; }
+
+/* Narrow screens: inspector drops below the lanes */
+@media (max-width: 960px) {
+  .pv { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(220px, 1fr) minmax(200px, 42%); grid-template-areas: "head" "lanes" "insp"; --lab: 120px; }
+  .pv-insp { border-left: 0; border-top: 1px solid var(--line); }
+  .pv-stats dd { font-size: 17px; }
+}

@@ -37,7 +37,10 @@ button:disabled { cursor: not-allowed; opacity: 0.4; }
 :focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .micro { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 
-.app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+.app { display: grid; grid-template-rows: auto auto 1fr auto auto; height: 100vh; }
+
+/* Classification banners (top and bottom): green = UNCLASSIFIED; this is an exercise on simulated data */
+.classification { background: oklch(0.55 0.13 150); color: oklch(0.98 0.01 150); text-align: center; font: 800 12px/1.6 var(--mono); letter-spacing: 0.18em; padding: 1px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Header: wordmark, scenario, source, live telemetry */
 header { display: flex; align-items: stretch; gap: 16px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; flex-wrap: wrap; }

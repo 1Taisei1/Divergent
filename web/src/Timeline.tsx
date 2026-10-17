@@ -104,7 +104,10 @@ function ZuluClock() {
     return () => window.clearTimeout(id);
   }, []);
   const iso = now.toISOString();
-  return <time className="tl-zulu" dateTime={iso} aria-label="Current UTC time">{iso.slice(11, 19)}<span>Z</span></time>;
+  // Military date-time group: DDHHMM:SSZ MON YY (UTC).
+  const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][now.getUTCMonth()];
+  const dtg = `${iso.slice(8, 10)}${iso.slice(11, 13)}${iso.slice(14, 16)}:${iso.slice(17, 19)}`;
+  return <time className="tl-zulu" dateTime={iso} aria-label="Current UTC date-time group">{dtg}<span>Z {MON} {iso.slice(2, 4)}</span></time>;
 }
 
 export default function Timeline({ t, max, playing, onT, onPlay, marks = [], events }: Props) {
