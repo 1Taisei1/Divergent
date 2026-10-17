@@ -185,6 +185,26 @@ nav button.on { color: var(--text); border-bottom-color: var(--text); }
 .alert-action { color: var(--text); font-weight: 800; font-size: 15px; }
 .alert-action span { color: var(--muted); }
 
+/* Action queue: precedence stripe + tag, acknowledge button, acknowledged alerts dimmed at the bottom */
+.alert { grid-template-columns: 1fr auto; align-items: start; border-left-width: 4px; }
+.alert.prec-2 { border-left-color: var(--hazard); }
+.alert.prec-1 { border-left-color: var(--origin); }
+.alert.prec-0 { border-left-color: var(--line-2); }
+.alert-body { all: unset; display: grid; gap: 4px; cursor: pointer; min-width: 0; }
+.alert-body:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.prec { padding: 0 5px; font-size: 12px; letter-spacing: 0.1em; border: 1px solid currentColor; }
+.prec.prec-2 { color: var(--hazard-ink); background: var(--hazard); border-color: var(--hazard); }
+.prec.prec-1 { color: var(--origin); }
+.prec.prec-0 { color: var(--muted); }
+.ack { align-self: stretch; padding: 0 12px; font-size: 13px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text); background: none; border: 1px solid var(--line-2); }
+.ack:hover { background: var(--text); color: var(--bg); }
+.alert.is-acked { opacity: 0.5; border-left-color: var(--line); }
+.queue-head { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.queue-head b { color: var(--text); font-variant-numeric: tabular-nums; }
+.queue-head.hot b:last-of-type { color: var(--hazard); }
+.queue-head .ghost.small { margin-left: auto; padding: 4px 10px; font-size: 13px; }
+.acked-head { margin-top: 8px; }
+
 button.primary, button.approve, button.abort, button.ghost { padding: 10px 14px; font-size: 15px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; border: 1px solid var(--line-2); transition: background 150ms var(--ease), color 150ms var(--ease); }
 button.primary { background: var(--panel-3); color: var(--text); }
 button.primary:hover:not(:disabled) { background: var(--text); color: var(--bg); }

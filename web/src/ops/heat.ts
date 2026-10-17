@@ -1,37 +1,57 @@
-// Heat-map images in the classic density-map look: transparent at zero, then blue → cyan → green → yellow → red.
+// Heat-map images: transparent at zero, then one colour family per meaning, so a colour never means two things.
+// threat = amber → red (danger rises), safe = pale → deep green (safety rises), unknown = pale → amber (MIL-STD-2525
+// "unknown" yellow). Single-hue ramps read as "more / less" at a glance; the old rainbow ramp made blue look important.
 // Grids are bilinear-upsampled before colouring so blobs come out smooth instead of 100 m blocks.
 import type { Grid, MaybeGrid } from '../types';
 import { isGrid } from '../types';
 
 type Stop = [number, number, number, number, number]; // value, r, g, b, alpha
-const STOPS: Stop[] = [
-  [0.0, 35, 70, 255, 0],
-  [0.06, 35, 70, 255, 0], // faint tails stay invisible, then fade in, so blobs have soft edges instead of slabs
-  [0.16, 35, 80, 255, 0.32],
-  [0.3, 0, 190, 255, 0.48],
-  [0.46, 40, 215, 95, 0.58],
-  [0.64, 250, 230, 40, 0.68],
-  [0.8, 255, 145, 25, 0.76],
-  [1.0, 232, 28, 28, 0.84],
-];
+export type Palette = 'threat' | 'safe' | 'unknown';
+const PALETTES: Record<Palette, Stop[]> = {
+  threat: [
+    [0.0, 255, 200, 60, 0],
+    [0.06, 255, 200, 60, 0], // faint tails stay invisible, then fade in, so blobs have soft edges instead of slabs
+    [0.2, 255, 196, 56, 0.3],
+    [0.45, 255, 150, 30, 0.5],
+    [0.7, 245, 90, 25, 0.68],
+    [1.0, 225, 30, 30, 0.84],
+  ],
+  safe: [
+    [0.0, 150, 235, 170, 0],
+    [0.06, 150, 235, 170, 0],
+    [0.2, 150, 235, 170, 0.26],
+    [0.45, 80, 214, 130, 0.45],
+    [0.7, 40, 190, 105, 0.62],
+    [1.0, 20, 160, 85, 0.8],
+  ],
+  unknown: [
+    [0.0, 255, 236, 140, 0],
+    [0.06, 255, 236, 140, 0],
+    [0.2, 255, 236, 140, 0.24],
+    [0.45, 255, 220, 90, 0.42],
+    [0.7, 245, 200, 50, 0.58],
+    [1.0, 230, 175, 20, 0.74],
+  ],
+};
 
 // Discrete swatches for the legend (no CSS gradients in this UI).
-export const LEGEND_SWATCHES = [0.12, 0.3, 0.46, 0.62, 0.78, 0.92].map((v) => {
-  const [r, g, b] = ramp(v);
+export const legendSwatches = (p: Palette) => [0.2, 0.4, 0.6, 0.8, 0.95].map((v) => {
+  const [r, g, b] = ramp(v, p);
   return `rgb(${r} ${g} ${b})`;
 });
 
-export function ramp(v: number): [number, number, number, number] {
+export function ramp(v: number, p: Palette = 'threat'): [number, number, number, number] {
   if (v <= 0.02) return [0, 0, 0, 0];
-  for (let i = 1; i < STOPS.length; i++) {
-    const [v1, r1, g1, b1, a1] = STOPS[i];
+  const stops = PALETTES[p];
+  for (let i = 1; i < stops.length; i++) {
+    const [v1, r1, g1, b1, a1] = stops[i];
     if (v <= v1) {
-      const [v0, r0, g0, b0, a0] = STOPS[i - 1];
+      const [v0, r0, g0, b0, a0] = stops[i - 1];
       const k = (v - v0) / (v1 - v0);
       return [r0 + (r1 - r0) * k, g0 + (g1 - g0) * k, b0 + (b1 - b0) * k, (a0 + (a1 - a0) * k) * 255];
     }
   }
-  const [, r, g, b, a] = STOPS[STOPS.length - 1];
+  const [, r, g, b, a] = stops[stops.length - 1];
   return [r, g, b, a * 255];
 }
 
@@ -56,7 +76,7 @@ const byContent = new Map<string, HeatFrame>();
 const MAX_FRAMES = 12;
 
 // Cheap content key: FNV-1a over values quantized to 1/256 (what the 8-bit ramp can show anyway).
-function contentKey(values: number[][], scale: number, size: number, spread: number): string {
+function contentKey(values: number[][], scale: number, size: number, spread: number, palette: Palette): string {
   let h = 0x811c9dc5;
   for (const row of values) {
     for (const v of row) {
@@ -64,7 +84,7 @@ function contentKey(values: number[][], scale: number, size: number, spread: num
       h = Math.imul(h, 0x01000193);
     }
   }
-  return `${(h >>> 0).toString(36)}:${values.length}:${size}:${spread}`;
+  return `${(h >>> 0).toString(36)}:${values.length}:${size}:${spread}:${palette}`;
 }
 
 // Separable Gaussian blur (sigma in cells), rescaled so the peak stays where it was. Display smoothing only.
@@ -90,8 +110,8 @@ function blur(values: number[][], sigma: number): number[][] {
 // `spread` (cells) softens small blobs so they read at overview zoom. `key` identifies the rendered contents, so
 // callers (and the tile layer) skip all work when a recomputed grid would render identically.
 export type HeatFrame = { key: string; canvas: HTMLCanvasElement };
-export function heatFrame(g: Grid, scale = 1, size = 320, spread = 0): HeatFrame {
-  const key = contentKey(g.values, scale, size, spread);
+export function heatFrame(g: Grid, palette: Palette = 'threat', scale = 1, size = 320, spread = 0): HeatFrame {
+  const key = contentKey(g.values, scale, size, spread, palette);
   const hit = byContent.get(key);
   if (hit) return hit;
   const { width: W, height: H } = g;
@@ -108,7 +128,7 @@ export function heatFrame(g: Grid, scale = 1, size = 320, spread = 0): HeatFrame
       const gx = ((j + 0.5) * W) / size - 0.5;
       const c0 = Math.floor(gx), kx = gx - c0;
       const val = (v(r0, c0) * (1 - kx) + v(r0, c0 + 1) * kx) * (1 - ky) + (v(r0 + 1, c0) * (1 - kx) + v(r0 + 1, c0 + 1) * kx) * ky;
-      const [r, gg, b, a] = ramp(Math.min(1, Math.max(0, val * scale)));
+      const [r, gg, b, a] = ramp(Math.min(1, Math.max(0, val * scale)), palette);
       const o = (i * size + j) * 4;
       img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = a;
     }
