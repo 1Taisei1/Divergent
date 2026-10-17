@@ -44,5 +44,12 @@ Build against the fixture until Diego sends the Freestyle URL (~1:30), then set 
 - [x] **12. What-if.** Right-click a sensor → "Disable" or "Move here…" → `POST /whatif` → show the result in a second map
   side-by-side, with linked slider t.
 
+- [ ] **12b. Recon pinpoint (added by Diego, do this next).** Pull `main`. Once the approved recon drone sees a launch site, every
+  frame carries `confirmed_sites: [{team_id, x, y, radius_m, first_seen_t, last_seen_t, source}]` (CONTRACT.md "ConfirmedSite"; `[]`
+  when none). Render it: a bold pin with a ring of `radius_m`, and dim or hide the origin heat map near it so the heat visibly
+  collapses to a point. Show the new alert kind `launch_site_confirmed` in the Alerts tab. Also: launch-team entries may now carry
+  `confirmed: true`. To test live: `POST /scenario/demo/recon/propose?t=20`, then approve with an operator name at t=20; the pin
+  appears around t=81 for LT2. Demo with that run. Fixture update is optional.
+
 - [ ] **13. 3:30 freeze.** `npm run build`, then screen-record the demo flow (about 90 s). At 3:50, make the 30-second launch video in
   Latted from the recording.
