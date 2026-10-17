@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { searchAreaKm2, sitesOf } from './backtrack';
 import { explain, reconAbort, reconApprove, reconPropose } from './data';
 import { pad3 } from './drones';
 import { pct } from './geo';
@@ -199,9 +200,45 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
 // The API may send null for a metric it couldn't compute; show a dash rather than a misleading 0.
 const num = (v: number | null | undefined, unit: string) => (typeof v === 'number' && Number.isFinite(v) ? `${Math.round(v)}${unit}` : '–');
 
+// How fast the search for launch sites narrows: computed from the frames, so it follows the slider.
+function Backtrack({ scenario, t }: { scenario: Scenario; t: number }) {
+  const series = scenario.frames.map((f) => ({ t: f.t, a: searchAreaKm2(f), sites: sitesOf(f).length }));
+  const upto = series.filter((p) => p.t <= t);
+  const peak = upto.reduce((m, p) => (p.a > m.a ? p : m), { t: 0, a: 0, sites: 0 });
+  const now = upto[upto.length - 1] ?? { t, a: 0, sites: 0 };
+  const firstFix = series.find((p) => p.sites > 0);
+  const agreeing = sitesOf(frameAt(scenario, t)).reduce((n, s) => n + s.trackIds.length, 0);
+  const W = 300, H = 70, P = 6;
+  const aMax = Math.max(0.01, ...series.map((p) => p.a));
+  const tMax = Math.max(1, scenario.frames.length - 1);
+  const sx = (x: number) => P + ((W - 2 * P) * x) / tMax;
+  const sy = (a: number) => H - P - ((H - 2 * P) * a) / aMax;
+  const km2 = (a: number) => (a >= 10 ? a.toFixed(0) : a >= 1 ? a.toFixed(1) : a.toFixed(2));
+  return (
+    <div className="backtrack">
+      <div className="alert-meta">Backtrack: where the drones came from</div>
+      <div className="big-numbers">
+        <div><span>Search area now</span><b className={now.a < peak.a ? 'ok' : ''}>{km2(now.a)} km²</b></div>
+        <div><span>Search area at peak</span><b>{km2(peak.a)} km²</b></div>
+        <div><span>Sites located</span><b>{now.sites}</b></div>
+        <div><span>First fix</span><b>{firstFix && firstFix.t <= t ? `T+${pad3(firstFix.t)}` : '–'}</b></div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Search area over time">
+        <polyline points={upto.map((p) => `${sx(p.t)},${sy(p.a)}`).join(' ')} className="line" />
+        <line x1={sx(Math.min(t, tMax))} y1={P} x2={sx(Math.min(t, tMax))} y2={H - P} className="now" />
+      </svg>
+      <p className="hint">
+        {agreeing
+          ? `${agreeing} drones' backward rays agree on ${now.sites} site${now.sites === 1 ? '' : 's'}. No radio signal needed: only the drones' motion.`
+          : 'Each drone alone gives a direction back (cone). Three that agree pin the launch site.'}
+      </p>
+    </div>
+  );
+}
+
 export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
   const m = scenario.metrics;
-  if (!m) return <div className="panel empty">No metrics for this scenario yet.</div>;
+  if (!m) return <div className="panel"><Backtrack scenario={scenario} t={t} /></div>;
   const pts = Object.entries(m.origin_error_m_by_t ?? {}).filter(([, v]) => typeof v === 'number').map(([k, v]) => ({ t: Number(k), v })).sort((a, b) => a.t - b.t);
   const first = pts.find((p) => p.t === 30) ?? pts[0];
   const now = [...pts].reverse().find((p) => p.t <= t) ?? pts[pts.length - 1];
@@ -212,6 +249,7 @@ export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
   const sy = (v: number) => H - P - ((H - 2 * P) * v) / vMax;
   return (
     <div className="panel">
+      <Backtrack scenario={scenario} t={t} />
       <div className="big-numbers">
         <div><span>Origin error at t = {first?.t ?? '–'} s</span><b>{first ? `${Math.round(first.v)} m` : '–'}</b></div>
         <div><span>Origin error at t = {now?.t ?? '–'} s</span><b className={now && first && now.t !== first.t ? (now.v <= first.v ? 'ok' : 'bad') : ''}>{now ? `${Math.round(now.v)} m` : '–'}</b></div>

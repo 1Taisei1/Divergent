@@ -361,3 +361,6 @@ button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text
 .site-pin { width: 26px; height: 26px; margin: 0; border-radius: 50% 50% 50% 0; background: var(--text); transform: rotate(-45deg); border: 3px solid var(--hazard); }
 .alert.kind-launch_site_confirmed .kind { color: var(--text); }
 .confirmed { background: var(--panel-2); border: 1px solid var(--ok); padding: 8px 12px; color: var(--ok); font-weight: 700; }
+
+.backtrack { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+.map .backtrack-label { color: #ffd3b0 !important; border-color: #ff8a3d !important; }

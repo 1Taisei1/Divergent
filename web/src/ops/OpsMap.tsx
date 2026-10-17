@@ -11,7 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { headingDeg, pad3, speedMs, STEP_MS } from '../drones';
 import { MAP_SIZE, pct } from '../geo';
 import { frameAt } from '../MapView';
-import type { Detection, Grid, Point, ReconRoute, Scenario, Sensor, Track } from '../types';
+import { conePoints, isTriangulated, sitesOf, type Site } from '../backtrack';
+import type { Detection, Grid, OriginEstimate, Point, ReconRoute, Scenario, Sensor, Track } from '../types';
 import {
   BOX_BOUNDS, BOX_CORNERS, circleRing, clampToBox, DEM_URL, DEM_ZOOM, EXAGGERATION, flatElevation, fromLngLat, HOME_BASE,
   IMAGERY_URL, loadElevation, toLngLat, type ElevationFn,
@@ -438,6 +439,26 @@ export default function OpsMap(p: Props) {
         id: 'origin-stalks', data: frame.origins, widthUnits: 'pixels', getWidth: 2.5, getColor: rgba(RGB.origin),
         getSourcePosition: (o: { peak: Point }) => at(o.peak.x, o.peak.y), getTargetPosition: (o: { peak: Point }) => at(o.peak.x, o.peak.y, 260),
         updateTriggers: { getSourcePosition: elev, getTargetPosition: elev },
+      }));
+      // Backtrack: rays from where each drone was first seen to its triangulated launch site; a lone drone only has a
+      // direction, drawn as the two edges of its cone (range unknown).
+      const firstPt = new Map(frame.tracks.filter((tr) => tr.points.length).map((tr) => [tr.id, tr.points[0]]));
+      const rays = frame.origins.filter((o) => isTriangulated(o) && firstPt.has(o.track_id));
+      out.push(new LineLayer({
+        id: 'backtrack-rays', data: rays, widthUnits: 'pixels', getWidth: 2, getColor: rgba(RGB.origin, 220),
+        getSourcePosition: (o: OriginEstimate) => { const q = firstPt.get(o.track_id)!; return at(q.x, q.y, 40); },
+        getTargetPosition: (o: OriginEstimate) => at(o.peak.x, o.peak.y, 40), updateTriggers: { getSourcePosition: elev, getTargetPosition: elev },
+      }));
+      const coneEdges = frame.tracks.filter((tr) => frame.origins.some((o) => o.track_id === tr.id && !isTriangulated(o)))
+        .flatMap((tr) => { const c = conePoints(tr); return c ? [{ a: c.apex, b: c.left }, { a: c.apex, b: c.right }] : []; });
+      out.push(new LineLayer({
+        id: 'backtrack-cones', data: coneEdges, widthUnits: 'pixels', getWidth: 1.2, getColor: rgba(RGB.origin, 110),
+        getSourcePosition: (e: { a: Point }) => at(e.a.x, e.a.y, 30), getTargetPosition: (e: { b: Point }) => at(e.b.x, e.b.y, 30),
+        updateTriggers: { getSourcePosition: elev, getTargetPosition: elev },
+      }));
+      out.push(text('backtrack-agree', sitesOf(frame), {
+        getPosition: (q: Site) => at(q.peak.x, q.peak.y, 380), getColor: rgba(RGB.origin),
+        getText: (q: Site) => `${q.trackIds.length} DRONES AGREE ±${Math.round(q.radius_m)}M`, updateTriggers: { getPosition: elev },
       }));
       // One label per launch-team site (several tracks share a site); per-track origins only for the selection.
       const conf = new Map(frame.origins.map((o) => [o.track_id, o.confidence]));

@@ -22,11 +22,19 @@ DEMO_TEAMS = [
     ("LT2", [(0, (1500, 3000))], [15, 50, 95]),
 ]
 
+# "dark": RF-silent drones that climb out low and terrain-masked, so allied sensors first see them UNSEEN_S after launch,
+# 1-1.6 km from the site. Radio-based tools have nothing to find; only the motion of the drones points back.
+DARK_TEAMS = [
+    ("LT1", [(0, (1600, 7200)), (45, (2500, 6300))], [5, 15, 30, 50, 58, 66]),
+    ("LT2", [(0, (1300, 2700))], [10, 25, 45]),
+]
+
 PRESETS = {
     "demo": dict(name="Two launch teams, cluttered sensors", teams=DEMO_TEAMS),
     "single": dict(name="One team, one drone", teams=[("LT1", [(0, (1800, 7500))], [10])]),
     "swarm": dict(name="One team, six-drone swarm", teams=[("LT1", [(0, (1800, 7500))], [20] * 6)]),
     "sparse": dict(name="Two teams, only S1 and S4 active", teams=DEMO_TEAMS, disable=["S2", "S3"]),
+    "dark": dict(name="Dark drones: RF-silent, launched out of sensor view", teams=DARK_TEAMS, unseen_s=40, rf_silent=True),
 }
 
 FRIENDLY_ROUTES = [
@@ -82,6 +90,8 @@ def generate(scenario_id: str, seed: int = 42, overrides: dict | None = None) ->
     truth_paths = {d["id"]: [] for d in drones}
     detections_by_t, did = {}, 0
     allied_active = [s for s in sensors if s["side"] == "allied" and s["active"]]
+    unseen_s = preset.get("unseen_s", 0)
+    rf_silent = preset.get("rf_silent", False)
     for t in range(duration + 1):
         dets = []
         for d in drones:
@@ -91,7 +101,11 @@ def generate(scenario_id: str, seed: int = 42, overrides: dict | None = None) ->
             if not (0 <= x <= MAP_M and 0 <= y <= MAP_M):
                 continue
             truth_paths[d["id"]].append({"t": t, "x": x, "y": y})
+            if t - d["t0"] < unseen_s:  # masked climb-out: no sensor sees it yet
+                continue
             for s in allied_active:
+                if rf_silent and s["type"] == "rf":
+                    continue
                 if _in_range(s, x, y):
                     sg = SIGMA[s["type"]]
                     did += 1
