@@ -44,7 +44,7 @@ Build against the fixture until Diego sends the Freestyle URL (~1:30), then set 
 - [x] **12. What-if.** Right-click a sensor → "Disable" or "Move here…" → `POST /whatif` → show the result in a second map
   side-by-side, with linked slider t.
 
-- [ ] **12b. Recon pinpoint (added by Diego, do this next).** Pull `main`. Once the approved recon drone sees a launch site, every
+- [x] **12b. Recon pinpoint (added by Diego, do this next).** Pull `main`. Once the approved recon drone sees a launch site, every
   frame carries `confirmed_sites: [{team_id, x, y, radius_m, first_seen_t, last_seen_t, source}]` (CONTRACT.md "ConfirmedSite"; `[]`
   when none). Render it: a bold pin with a ring of `radius_m`, and dim or hide the origin heat map near it so the heat visibly
   collapses to a point. Show the new alert kind `launch_site_confirmed` in the Alerts tab. Also: launch-team entries may now carry
