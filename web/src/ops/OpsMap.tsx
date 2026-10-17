@@ -19,7 +19,7 @@ import {
 import { coverageLayers } from './coverage';
 import { toMGRS } from './mgrs';
 import { detectionField, enemyOriginField, hostileActivityField, routeThreatField, safeLaunchField } from './analytics';
-import { heatFrame, LEGEND_SWATCHES, lift, type HeatFrame } from './heat';
+import { heatFrame, legendSwatches, lift, type HeatFrame, type Palette } from './heat';
 import { addHeatLayers, setHeat } from './heatTiles';
 import { planRoutes } from './route';
 import AutonomyPanel from './AutonomyPanel';
@@ -30,12 +30,13 @@ import {
 import ProvenanceView from './Provenance';
 
 export type OpsMode = 'enemy' | 'launch' | 'route' | 'survey' | 'provenance';
-const MODES: { id: OpsMode; code: string; label: string; red: string; low: string; high: string }[] = [
-  { id: 'enemy', code: '01', label: 'Enemy origins', red: 'Red = most likely enemy launch area (model estimate)', low: 'Unlikely', high: 'Likely' },
-  { id: 'launch', code: '02', label: 'Safe launch', red: 'Red = safest place for us to launch from (model estimate)', low: 'Exposed', high: 'Safest' },
-  { id: 'route', code: '03', label: 'Route plan', red: 'Red = threat: enemy detection, activity, launch areas', low: 'Clear', high: 'Threat' },
-  { id: 'survey', code: '04', label: 'Auto survey', red: 'Red = unsurveyed, high-value ground', low: 'Mapped', high: 'Unknown' },
-  { id: 'provenance', code: '05', label: 'Provenance', red: '', low: '', high: '' },
+// One colour family per meaning (heat.ts): red = enemy / threat, green = safe for us, amber = unknown.
+const MODES: { id: OpsMode; code: string; label: string; palette: Palette; red: string; low: string; high: string }[] = [
+  { id: 'enemy', code: '01', label: 'Enemy origins', palette: 'threat', red: 'Red = likely enemy launch area (model estimate)', low: 'Unlikely', high: 'Likely' },
+  { id: 'launch', code: '02', label: 'Safe launch', palette: 'safe', red: 'Green = safest place for us to launch (model estimate)', low: 'Exposed', high: 'Safest' },
+  { id: 'route', code: '03', label: 'Route plan', palette: 'threat', red: 'Red = threat: enemy detection, activity, launch areas', low: 'Clear', high: 'Threat' },
+  { id: 'survey', code: '04', label: 'Auto survey', palette: 'unknown', red: 'Amber = unsurveyed, high-value ground', low: 'Mapped', high: 'Unknown' },
+  { id: 'provenance', code: '05', label: 'Provenance', palette: 'threat', red: '', low: '', high: '' },
 ];
 
 type RGBA = [number, number, number, number];
@@ -335,10 +336,10 @@ export default function OpsMap(p: Props) {
     const map = mapRef.current;
     if (!ready || !map || !frame) return;
     let heat: HeatFrame | null = null;
-    if (mode === 'enemy' && originField) heat = heatFrame(lift(originField, 0.55)); // show the back-projected cones, not just the peaks
-    if (mode === 'launch' && launchField) heat = heatFrame(lift(launchField, 0.5)); // rank the whole box, not only the top sites
-    if (mode === 'route' && threat) heat = heatFrame(threat);
-    if (mode === 'survey') heat = heatFrame(uncertaintyGrid(shownMission));
+    if (mode === 'enemy' && originField) heat = heatFrame(lift(originField, 0.55), 'threat'); // show the back-projected cones, not just the peaks
+    if (mode === 'launch' && launchField) heat = heatFrame(lift(launchField, 0.5), 'safe'); // rank the whole box, not only the top sites
+    if (mode === 'route' && threat) heat = heatFrame(threat, 'threat');
+    if (mode === 'survey') heat = heatFrame(uncertaintyGrid(shownMission), 'unknown');
     setHeat(map, heat?.canvas ?? null, heat?.key ?? '', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
 
     // setData re-tiles in a worker, so only send sources whose contents actually changed.
@@ -577,6 +578,21 @@ export default function OpsMap(p: Props) {
   const flyTo = (q: Point) => mapRef.current?.flyTo({ center: toLngLat(q.x, q.y), zoom: 14, pitch: Math.max(50, pitch), duration: 1200 });
 
   const m = MODES.find((x) => x.id === mode)!;
+  const selectMode = (id: OpsMode) => { setMode(id); setPickStart(false); if (id === 'survey' && mode !== 'survey') recenter(BOX_BOUNDS, 0); };
+  // Keys 1–5 switch mission tabs, Esc clears the selected track (not while typing in a field).
+  const selectModeRef = useRef(selectMode);
+  useEffect(() => { selectModeRef.current = selectMode; });
+  const onSelectTrack = p.onSelectTrack;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof Element && e.target.closest('input, textarea, select'))) return;
+      const i = Number(e.key) - 1;
+      if (i >= 0 && i < MODES.length) { e.preventDefault(); selectModeRef.current(MODES[i].id); }
+      if (e.key === 'Escape') onSelectTrack(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onSelectTrack]);
   const selTrack = frame?.tracks.find((x) => x.id === p.selectedTrack) ?? null;
   const selDrone = drones.find((d) => d.id === p.selectedTrack) ?? null;
   const selOrigin = frame?.origins.find((o) => o.track_id === p.selectedTrack) ?? null;
@@ -589,8 +605,8 @@ export default function OpsMap(p: Props) {
 
       <div className="ops-modes" role="tablist" aria-label="Map layer">
         {MODES.map((x) => (
-          <button key={x.id} role="tab" aria-selected={mode === x.id} className={mode === x.id ? 'on' : ''}
-            onClick={() => { setMode(x.id); setPickStart(false); if (x.id === 'survey' && mode !== 'survey') recenter(BOX_BOUNDS, 0); }}><span className="ops-mode-code">{x.code}</span>{x.label}</button>
+          <button key={x.id} role="tab" aria-selected={mode === x.id} className={mode === x.id ? 'on' : ''} title={`${x.label} (key ${Number(x.code)})`}
+            onClick={() => selectMode(x.id)}><span className="ops-mode-code">{x.code}</span>{x.label}</button>
         ))}
       </div>
       <div className="badge sim-badge">SIM // ALL DATA SIMULATED</div>
@@ -687,7 +703,7 @@ export default function OpsMap(p: Props) {
         <span className="micro">{m.red}</span>
         <div className="ops-ramp">
           <span>{m.low}</span>
-          {LEGEND_SWATCHES.map((c, i) => <i key={i} style={{ background: c }} />)}
+          {legendSwatches(m.palette).map((c, i) => <i key={i} style={{ background: c }} />)}
           <span>{m.high}</span>
         </div>
       </div>

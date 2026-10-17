@@ -2,7 +2,7 @@ import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, t
 import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } from './data';
 import { pad3 } from './drones';
 import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
-import { AlertsTab, alertsUpTo, ExplainTab, LayersTab, MetricsTab, SurveyTab } from './panels';
+import { alertKey, AlertsTab, alertsUpTo, ExplainTab, LayersTab, MetricsTab, SurveyTab } from './panels';
 import Timeline from './Timeline';
 import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './types';
 
@@ -45,6 +45,8 @@ export default function App() {
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState<Source>(dataSource());
   const [view, setView] = useState<'ops' | 'classic'>(hasWebGL2 ? 'ops' : 'classic');
+  const [acked, setAcked] = useState<Set<string>>(() => new Set());
+  const ack = useCallback((key: string) => setAcked((s) => new Set(s).add(key)), []);
 
   useEffect(() => {
     listScenarios().then(setList).catch((e) => setErr(String(e)));
@@ -54,7 +56,7 @@ export default function App() {
   useEffect(() => {
     let live = true;
     setScenario(null); setErr(''); setT(0); setPlaying(false);
-    setSelectedTrack(null); setProposed(null); setAlt(null); setMoveSensor(null);
+    setSelectedTrack(null); setProposed(null); setAlt(null); setMoveSensor(null); setAcked(new Set());
     loadScenario(sid).then((s) => { if (live) { setScenario(s); setSource(dataSource()); } }).catch((e) => live && setErr(String(e)));
     return () => { live = false; };
   }, [sid]);
@@ -74,8 +76,18 @@ export default function App() {
   }, [playing, maxT]);
 
   useEffect(() => {
+    // Space = play/pause; ← / → step one second (Shift: ten), pausing first so the operator can read the frame.
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || (e.target as HTMLElement).closest('input, textarea, button')) return;
+      const target = e.target instanceof Element ? e.target : document.body;
+      if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+        if (target.closest('input, textarea, select, .maplibregl-canvas')) return; // the 3D map pans with arrows
+        e.preventDefault();
+        const step = (e.shiftKey ? 10 : 1) * (e.code === 'ArrowLeft' ? -1 : 1);
+        setPlaying(false);
+        setT((x) => Math.min(maxT, Math.max(0, x + step)));
+        return;
+      }
+      if (e.code !== 'Space' || target.closest('input, textarea, button')) return;
       e.preventDefault();
       setPlaying((p) => { if (!p && t >= maxT) setT(0); return !p; });
     };
@@ -99,7 +111,7 @@ export default function App() {
   const alertMarks = useMemo(() => scenario?.frames.filter((f) => f.alerts.length).map((f) => f.t) ?? [], [scenario]);
   const alertEvents = useMemo(() => scenario?.frames.flatMap((f) => f.alerts.map((a) => ({ t: f.t, kind: a.kind }))), [scenario]);
   const shownView = alt ? 'classic' : view; // a what-if always opens in the 2D split
-  const alertCount = scenario ? alertsUpTo(scenario, t).length : 0;
+  const alertCount = scenario ? alertsUpTo(scenario, t).filter((a) => !acked.has(alertKey(a))).length : 0; // open (unacknowledged)
   const reconRoute = scenario?.recon_route && scenario.recon_route.status !== 'proposed' ? scenario.recon_route : proposed?.route ?? null;
   const frame = scenario ? frameAt(scenario, t) : undefined;
   const live = frame?.tracks.filter((x) => x.status === 'active').length ?? 0;
@@ -178,7 +190,7 @@ export default function App() {
             <div className="panel"><p className="hint">Layer toggles drive the 2D classic map. In the 3D view, each map tab shows one analysis layer; switch to 2D classic to toggle layers individually.</p></div>
           )}
           {scenario && tab === 'Layers' && shownView === 'classic' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
-          {scenario && tab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} />}
+          {scenario && tab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} acked={acked} onAck={ack} />}
           {scenario && tab === 'Explain' && <ExplainTab scenario={scenario} t={t} />}
           {scenario && tab === 'Survey' && (
             <SurveyTab scenario={scenario} t={t} proposed={proposed?.route ?? null} proposedAt={proposed?.t ?? t}

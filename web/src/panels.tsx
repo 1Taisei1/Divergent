@@ -4,7 +4,7 @@ import { pad3 } from './drones';
 import { pct } from './geo';
 import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
-import type { Alert, ReconRoute, Scenario } from './types';
+import type { Alert, AlertKind, ReconRoute, Scenario } from './types';
 
 export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario; layers: Layers; setLayers: (l: Layers) => void }) {
   const sites = scenario.launch_site_options ?? [];
@@ -47,18 +47,50 @@ export function alertsUpTo(s: Scenario, t: number): Alert[] {
   return s.frames.filter((f) => f.t <= t).flatMap((f) => f.alerts).sort((a, b) => b.t - a.t);
 }
 
-export function AlertsTab({ scenario, t, onJump }: { scenario: Scenario; t: number; onJump: (t: number) => void }) {
+// Military message precedence: what needs a decision now sits on top, routine track bookkeeping at the bottom.
+const PRECEDENCE: Record<AlertKind, 0 | 1 | 2> = {
+  route_exposed: 2, recon_auto_return: 2,
+  origin_confident: 1, launch_team_moved: 1, launch_forecast: 1, launch_site_confirmed: 1,
+  new_track: 0, track_lost: 0,
+};
+const PRECEDENCE_LABEL = ['Routine', 'Priority', 'Immediate'] as const;
+export const alertKey = (a: Alert) => `${a.t}|${a.kind}|${a.ref_id}|${a.message}`;
+
+type AlertsProps = { scenario: Scenario; t: number; onJump: (t: number) => void; acked: Set<string>; onAck: (key: string) => void };
+
+export function AlertsTab({ scenario, t, onJump, acked, onAck }: AlertsProps) {
   const alerts = alertsUpTo(scenario, t);
   if (!alerts.length) return <div className="panel empty">No alerts yet at t = {t} s.</div>;
+  // Open alerts: highest precedence first, newest first within a precedence. Acknowledged ones drop to the bottom.
+  const open = alerts.filter((a) => !acked.has(alertKey(a))).sort((a, b) => PRECEDENCE[b.kind] - PRECEDENCE[a.kind] || b.t - a.t);
+  const done = alerts.filter((a) => acked.has(alertKey(a)));
+  const immediate = open.filter((a) => PRECEDENCE[a.kind] === 2).length;
+  const row = (a: Alert, isDone: boolean) => {
+    const p = PRECEDENCE[a.kind];
+    return (
+      <div key={alertKey(a)} className={`alert kind-${a.kind} prec-${p}${isDone ? ' is-acked' : ''}`}>
+        <button className="alert-body" onClick={() => onJump(a.t)} title={`Jump to T+${pad3(a.t)}`}>
+          <div className="alert-meta">
+            <span className={`prec prec-${p}`}>{PRECEDENCE_LABEL[p]}</span>
+            <span className="tcode">T+{pad3(a.t)}</span><span className="kind">{a.kind.replace(/_/g, ' ')}</span>
+          </div>
+          <div className="alert-msg">{a.message}</div>
+          {!isDone && <div className="alert-action"><span aria-hidden="true">&gt;&gt; </span>{a.recommended_action}</div>}
+        </button>
+        {!isDone && <button className="ack" onClick={() => onAck(alertKey(a))} title="Acknowledge: I have seen this">Ack</button>}
+      </div>
+    );
+  };
   return (
     <div className="panel">
-      {alerts.map((a, i) => (
-        <button key={i} className={`alert kind-${a.kind}`} onClick={() => onJump(a.t)} title={`Jump to T+${pad3(a.t)}`}>
-          <div className="alert-meta"><span className="tcode">T+{pad3(a.t)}</span><span className="kind">{a.kind.replace(/_/g, ' ')}</span></div>
-          <div className="alert-msg">{a.message}</div>
-          <div className="alert-action"><span aria-hidden="true">&gt;&gt; </span>{a.recommended_action}</div>
-        </button>
-      ))}
+      <div className={`queue-head${immediate ? ' hot' : ''}`}>
+        <b>{open.length}</b> open{immediate ? <> · <b>{immediate}</b> immediate</> : null}
+        {open.length > 1 && <button className="ghost small" onClick={() => open.forEach((a) => onAck(alertKey(a)))}>Ack all</button>}
+      </div>
+      {open.map((a) => row(a, false))}
+      {!open.length && <p className="hint">All alerts acknowledged.</p>}
+      {done.length > 0 && <div className="alert-meta acked-head">Acknowledged ({done.length})</div>}
+      {done.map((a) => row(a, true))}
     </div>
   );
 }

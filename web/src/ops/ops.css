@@ -17,11 +17,14 @@
 .ops-modes button.on .ops-mode-code { color: var(--hazard); border-color: var(--hazard); }
 .ops-modes button:focus-visible { outline: 2px solid var(--text); outline-offset: -3px; }
 
-/* Area-of-operations strip: says plainly that the real terrain placement is illustrative */
-.ops-ao { position: absolute; z-index: 5; top: 16px; right: 16px; transform: translateY(34px); max-width: 46ch; padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); background: oklch(0.13 0.005 60 / 0.85); border: 1px solid var(--line); text-align: right; pointer-events: none; }
+/* The mission tabs own the top row on their own (the SIM badge used to sit on top of tab 05). The SIM badge, AO strip,
+   zoom and camera controls stack down the right edge underneath it. */
+.ops .ops-modes { max-width: calc(100% - 32px); }
+.ops .sim-badge { top: 64px; }
+.ops-ao { position: absolute; z-index: 5; top: 98px; right: 16px; max-width: 46ch; padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); background: oklch(0.13 0.005 60 / 0.85); border: 1px solid var(--line); text-align: right; pointer-events: none; }
 .ops-ao b { color: var(--text); }
-.ops .maplibregl-ctrl-top-right { top: 84px; }
-.ops-camera { top: 204px; }
+.ops .maplibregl-ctrl-top-right { top: 132px; }
+.ops-camera { top: 252px; }
 
 /* Viewport corner brackets (same device as the 2D map), under the floating panels */
 .ops .hud-frame { inset: 6px; z-index: 4; }
