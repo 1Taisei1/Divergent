@@ -62,6 +62,7 @@ def test_track_fields():
     final = tracker.run(fake_raw())[59]
     t1 = next(tr for tr in final if tr["id"] == "T1")
     assert t1["sensor_ids"] == ["S1", "S2"]
+    assert t1["truth_drone_id"] == "E1"  # for planning/metrics.py
     assert t1["points"][0]["t"] == 10
     assert t1["ellipse"]["major_m"] >= t1["ellipse"]["minor_m"] > 0
     assert 0 <= t1["ellipse"]["angle_deg"] < 180
