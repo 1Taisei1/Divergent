@@ -3,6 +3,7 @@ import { apiUrl, dataSource, listScenarios, loadScenario, whatIf, type Source } 
 import { pad3 } from './drones';
 import MapView, { ALL_LAYERS, frameAt, type Layers } from './MapView';
 import { alertKey, AlertsTab, alertsUpTo, LayersTab, MetricsTab, SurveyTab } from './panels';
+import Logo from './Logo';
 import Timeline from './Timeline';
 import type { ReconRoute, Scenario, ScenarioListItem, WhatIfRequest } from './types';
 
@@ -125,7 +126,10 @@ export default function App() {
     <div className="app">
       <div className="classification" role="note">UNCLASSIFIED // EXERCISE // SIMULATED DATA</div>
       <header>
-        <h1 className="brand"><span className="brand-mark">Divergent</span><span className="brand-sub">Drone origin picture</span></h1>
+        <h1 className="brand">
+          <Logo className="brand-logo" />
+          <span className="brand-text"><span className="brand-mark">Divergent</span><span className="brand-sub">Drone origin picture</span></span>
+        </h1>
         <label className="scenario">
           <span className="micro">Scenario</span>
           <select value={sid} onChange={(e) => setSid(e.target.value)}>
