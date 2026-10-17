@@ -140,6 +140,51 @@ export function heatFrame(g: Grid, palette: Palette = 'threat', scale = 1, size 
   return frame;
 }
 
+// Survey-tab heat: what the drone has uploaded. Ground it has mapped shows the danger level it found there (red ramp)
+// or green where it is clear; ground it has not mapped stays amber (unknown, by survey value). `mapped` is the
+// mission's 100 x 100 coverage (row 0 = south, 0..1); the two pictures blend where the camera footprint fades out.
+const CLEAR_BELOW = 0.2;
+export function revealFrame(danger: Grid, unknown: Grid, mapped: Float32Array, size = 320): HeatFrame {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < mapped.length; i += 3) { h ^= Math.round(mapped[i] * 15); h = Math.imul(h, 0x01000193); }
+  const key = `reveal:${contentKey(danger.values, 1, size, 0, 'threat')}:${contentKey(unknown.values, 1, size, 0, 'unknown')}:${(h >>> 0).toString(36)}`;
+  const hit = byContent.get(key);
+  if (hit) return hit;
+  const W = danger.width, H = danger.height, N = Math.round(Math.sqrt(mapped.length));
+  const at = (vals: number[][], r: number, c: number) => vals[Math.min(H - 1, Math.max(0, r))]?.[Math.min(W - 1, Math.max(0, c))] ?? 0;
+  const mAt = (r: number, c: number) => mapped[Math.min(N - 1, Math.max(0, r)) * N + Math.min(N - 1, Math.max(0, c))] ?? 0;
+  const bil = (f: (r: number, c: number) => number, r0: number, c0: number, ky: number, kx: number) =>
+    (f(r0, c0) * (1 - kx) + f(r0, c0 + 1) * kx) * (1 - ky) + (f(r0 + 1, c0) * (1 - kx) + f(r0 + 1, c0 + 1) * kx) * ky;
+  const clear = ramp(0.32, 'safe');
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < size; i++) {
+    const gy = ((size - 1 - i + 0.5) * H) / size - 0.5;
+    const r0 = Math.floor(gy), ky = gy - r0;
+    for (let j = 0; j < size; j++) {
+      const gx = ((j + 0.5) * W) / size - 0.5;
+      const c0 = Math.floor(gx), kx = gx - c0;
+      const m = Math.min(1, Math.max(0, bil(mAt, r0, c0, ky, kx)));
+      const u = ramp(Math.min(1, Math.max(0, bil((r, col) => at(unknown.values, r, col), r0, c0, ky, kx))), 'unknown');
+      let px = u;
+      if (m > 0.02) {
+        const d = Math.min(1, Math.max(0, bil((r, col) => at(danger.values, r, col), r0, c0, ky, kx)));
+        const seen = d >= CLEAR_BELOW ? ramp(d, 'threat') : clear;
+        px = [seen[0] * m + u[0] * (1 - m), seen[1] * m + u[1] * (1 - m), seen[2] * m + u[2] * (1 - m), seen[3] * m + u[3] * (1 - m)];
+      }
+      const o = (i * size + j) * 4;
+      img.data[o] = px[0]; img.data[o + 1] = px[1]; img.data[o + 2] = px[2]; img.data[o + 3] = px[3];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const frame = { key, canvas: c };
+  byContent.set(key, frame);
+  if (byContent.size > MAX_FRAMES) byContent.delete(byContent.keys().next().value!);
+  return frame;
+}
+
 // Enemy-tab heat: each origin estimate is a Gaussian (sigma = its uncertainty radius, at least MIN_SIGMA_M) whose height
 // is its confidence, combined by max, so a site is as red as its most confident estimate (not as dense as its launches).
 const MIN_SIGMA_M = 250;

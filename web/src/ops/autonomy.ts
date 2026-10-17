@@ -18,7 +18,7 @@ export interface MissionConfig {
   speedMs: number;
   footprintM: number; // camera footprint radius on the ground
   altitudeAglM: number;
-  maxRisk: number; // 0..1, legs whose peak threat is above this are rejected; threat above this at the drone forces RTH
+  maxRisk: number; // 0..1 advisory: legs and positions above it are flagged in the log, never refused (operator accepts the risk)
   enduranceS: number;
 }
 
@@ -30,7 +30,7 @@ export const DEFAULT_MISSION: MissionConfig = {
   footprintM: 700,
   altitudeAglM: 120,
   maxRisk: 0.6,
-  enduranceS: 900,
+  enduranceS: 1800, // 30 min: about 40 km, so any box in the 10 km AO is reachable and back
 };
 
 export type MissionPhase = 'idle' | 'armed' | 'mapping' | 'planning' | 'flying' | 'updating' | 'returning' | 'complete' | 'aborted';
@@ -60,6 +60,7 @@ export interface MissionState {
   aborted: boolean;
   legStartS: number;
   legStartCoverage: number;
+  riskWarnedLeg: number; // last leg we logged a high-threat crossing for
 }
 
 export type MissionContext = {
@@ -83,7 +84,7 @@ const BEAM = [3, 2]; // lookahead: keep 3 first legs, 2 second legs each, then t
 const DISCOUNT = [1, 0.7, 0.5];
 const SUBSTEP_S = 2, BREADCRUMB_M = 60, ARRIVE_M = 1;
 const SITE_MIN_CONF = 0.25, SITE_DEDUPE_M = 500, SIGHTING_GAP_S = 60;
-const HEAT_REFRESH_S = 8; // the uncertainty heat redraws at most this often while flying (and after every leg)
+const HEAT_REFRESH_S = 2; // mission seconds between value-map refreshes in flight: the heat updates continuously as it maps
 
 const AIRBORNE = new Set<MissionPhase>(['mapping', 'planning', 'flying', 'updating', 'returning']);
 export const isAirborne = (p: MissionPhase) => AIRBORNE.has(p);
@@ -167,7 +168,8 @@ function uncertaintyOf(covered: Float32Array, info: PriorInfo, cfg: MissionConfi
     const row = new Array<number>(N);
     for (let c = 0; c < N; c++) {
       const i = r * N + c;
-      row[c] = inArea(cfg, (c + 0.5) * CELL, (r + 0.5) * CELL) ? (1 - covered[i]) * (HAZE + (1 - HAZE) * info.norm[i]) : 0;
+      const x = (c + 0.5) * CELL, y = (r + 0.5) * CELL;
+      row[c] = !inFence(cfg, x, y) ? 0 : (1 - covered[i]) * (inArea(cfg, x, y) ? HAZE + (1 - HAZE) * info.norm[i] : HAZE * 0.6);
     }
     values.push(row);
   }
@@ -271,7 +273,7 @@ function scoreLegs(from: Point, covered: Float32Array, info: PriorInfo, cfg: Mis
     if (len < MIN_LEG || len > MAX_LEG) continue;
     if (len + dist(to, cfg.home) > budgetM) { if (stats) stats.energy++; continue; }
     const th = legThreat(threat, from, to);
-    if (th.max > cfg.maxRisk) { if (stats) stats.risk++; continue; }
+    if (th.max > cfg.maxRisk && stats) stats.risk++; // advisory only: counted and reported, still flyable
     const gain = legGain(sat, from, to, cfg.footprintM);
     const gpm = gain / (len + 250);
     if (gpm > best) best = gpm;
@@ -301,7 +303,7 @@ function planNext(s: MissionState, cfg: MissionConfig, info: PriorInfo, threat: 
     const k = Math.min(1, MAX_LEG / d);
     const to = { x: s.pos.x + (target.x - s.pos.x) * k, y: s.pos.y + (target.y - s.pos.y) * k };
     const len = dist(s.pos, to), th = legThreat(threat, s.pos, to);
-    if (th.max > cfg.maxRisk || len + dist(to, cfg.home) > budget) return null;
+    if (len + dist(to, cfg.home) > budget) return null;
     const leg = { to, len, gain: 0, maxThreat: th.max, meanThreat: th.mean, score: 0 };
     return { plan: [to], first: leg, total: lvl1.total, rejectedRisk: stats.risk, rejectedEnergy: stats.energy };
   }
@@ -336,7 +338,7 @@ export function initMission(cfg: MissionConfig, prior: Grid | null, threat: Grid
   return {
     phase: 'idle', clockS: 0, pos: { ...cfg.home }, headingDeg: 0, flown: [{ ...cfg.home }], plan: [], covered,
     uncertainty: uncertaintyOf(covered, info, cfg), findings: [], operator: null, coverage: 0,
-    risk: sample(threat, cfg.home.x, cfg.home.y), battery: 1, legs: 0, phaseS: 0, aborted: false, legStartS: 0, legStartCoverage: 0,
+    risk: sample(threat, cfg.home.x, cfg.home.y), battery: 1, legs: 0, phaseS: 0, aborted: false, legStartS: 0, legStartCoverage: 0, riskWarnedLeg: -1,
     log: [{ t: 0, phase: 'idle', msg: `Simulated autonomous survey on standby, area: ${areaName(cfg)}. Nothing moves until a named operator arms it.` }],
   };
 }
@@ -351,7 +353,7 @@ export function armMission(s: MissionState, operator: string): MissionState {
   if (s.phase !== 'idle') return withLog(s, `Arm ignored: survey is already ${s.phase}.`);
   if (!op) return withLog(s, 'Arm refused: a named human operator must arm the survey.');
   return withLog({ ...s, phase: 'armed', operator: op, phaseS: 0 },
-    `Armed by ${op}. Pre-flight checks: geofence loaded, risk limit and auto return-to-home active.`, 'armed');
+    `Armed by ${op}. Pre-flight checks: geofence loaded, battery return-to-home active, threat advisory on (logged, never a stop).`, 'armed');
 }
 
 export function abortMission(s: MissionState): MissionState {
@@ -397,13 +399,18 @@ export function stepMission(s0: MissionState, dtS: number, cfg: MissionConfig, c
         const r = planNext(s, cfg, info, ctx.threat);
         if (!r) {
           const energyBound = (s.battery * cfg.enduranceS - RESERVE_S) * cfg.speedMs < dist(s.pos, cfg.home) + MIN_LEG * 2;
-          goHome(energyBound ? `Battery ${pct(s.battery)}: no further leg fits with the return reserve.` : 'No safe, worthwhile leg left inside the geofence and risk limit.');
+          const a = cfg.area, budgetM = (s.battery * cfg.enduranceS - RESERVE_S) * cfg.speedMs;
+          const mid = a ? { x: (a.x0 + a.x1) / 2, y: (a.y0 + a.y1) / 2 } : null;
+          const need = a && mid && !inBox(a, s.pos.x, s.pos.y) ? dist(s.pos, mid) + dist(mid, cfg.home) : 0;
+          goHome(need > budgetM ? `Survey area out of range: ${km(need)} there and back, battery allows ${km(Math.max(0, budgetM))}.`
+            : energyBound ? `Battery ${pct(s.battery)}: no further leg fits with the return reserve.`
+            : 'Nothing worthwhile left to map in the survey area.');
         } else {
           const f = r.first;
           const share = r.total > 0 ? Math.min(1, f.gain / r.total) : 0;
-          const rej = r.rejectedRisk ? ` ${r.rejectedRisk} candidate leg${r.rejectedRisk === 1 ? '' : 's'} rejected over the ${pct(cfg.maxRisk)} risk limit.` : '';
+          const rej = f.maxThreat > cfg.maxRisk ? ` Crosses ${pct(f.maxThreat)} threat, above the ${pct(cfg.maxRisk)} advisory: flying it, risk accepted by ${s.operator ?? 'operator'}.` : '';
           s = withLog(s, f.gain === 0 && cfg.area
-            ? `Transit leg ${s.legs + 1}: ${km(f.len)} toward the survey area, peak threat ${pct(f.maxThreat)}.`
+            ? `Transit leg ${s.legs + 1}: ${km(f.len)} toward the survey area, peak threat ${pct(f.maxThreat)}, mapping on the way.${rej}`
             : `Plan leg ${s.legs + 1}: ${km(f.len)} to ${at10(f.to)}, sweeps ~${pct(share)} of remaining survey value, peak threat ${pct(f.maxThreat)}.${rej}`);
           go('flying', `Flying leg ${s.legs + 1} at ${cfg.speedMs} m/s, camera mapping a ${km(cfg.footprintM * 2)} swath.`,
             { plan: r.plan, legStartS: s.clockS, legStartCoverage: s.coverage });
@@ -453,8 +460,10 @@ export function stepMission(s0: MissionState, dtS: number, cfg: MissionConfig, c
       continue;
     }
     if (ph === 'flying') {
-      if (s.risk > cfg.maxRisk) goHome(`Threat at drone ${pct(s.risk)} exceeds the ${pct(cfg.maxRisk)} limit: automatic return-to-home.`);
-      else if (s.battery * cfg.enduranceS <= dist(pos, cfg.home) / cfg.speedMs + RESERVE_S) goHome(`Battery ${pct(s.battery)} at return reserve: automatic return-to-home.`);
+      if (s.risk > cfg.maxRisk && s.riskWarnedLeg !== s.legs) {
+        s = withLog({ ...s, riskWarnedLeg: s.legs }, `Inside enemy coverage: threat at drone ${pct(s.risk)} (advisory ${pct(cfg.maxRisk)}). Continuing the survey.`);
+      }
+      if (s.battery * cfg.enduranceS <= dist(pos, cfg.home) / cfg.speedMs + RESERVE_S) goHome(`Battery ${pct(s.battery)} at return reserve: automatic return-to-home.`);
     }
   }
 
