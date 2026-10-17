@@ -1,10 +1,10 @@
 # DIEGO — task list
 Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
 
-- [ ] **1. Scaffold.** Create `sim/__init__.py`, `api/__init__.py`, `analysis/__init__.py`, `planning/__init__.py`,
+- [x] **1. Scaffold.** Create `sim/__init__.py`, `api/__init__.py`, `analysis/__init__.py`, `planning/__init__.py`,
   `requirements.txt` (fastapi uvicorn numpy filterpy pydantic pytest). Commit.
 
-- [ ] **2. `sim/generate.py`** — `generate(scenario_id: str, seed: int = 42, overrides: dict | None = None) -> dict`
+- [x] **2. `sim/generate.py`** — `generate(scenario_id: str, seed: int = 42, overrides: dict | None = None) -> dict`
   returning the RawScenario in CONTRACT.md. Preset `demo`:
   - Map 10000 x 10000 m, `duration_s` 120.
   - Allied sensors S1–S4 spread across the map (radar 2500 m, acoustic 1500 m, rf 3000 m ranges); enemy sensors ES1, ES2 in the
