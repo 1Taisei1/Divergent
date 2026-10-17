@@ -65,7 +65,7 @@ def fake_raw():
         raw_dets.append((int(rng.integers(DURATION_S)), s["id"], s["x"] + r * np.cos(a), s["y"] + r * np.sin(a), True, None))
 
     raw_dets.sort(key=lambda d: (d[0], d[1]))
-    detections_by_t = {t: [] for t in range(DURATION_S)}
+    detections_by_t = {t: [] for t in range(DURATION_S + 1)}  # t = 0..duration inclusive, like sim/generate.py
     for i, (t, sensor_id, x, y, clutter, drone_id) in enumerate(raw_dets):
         detections_by_t[t].append({
             "id": f"D-{i:06d}", "t": t, "sensor_id": sensor_id,

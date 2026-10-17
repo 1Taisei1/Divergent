@@ -7,6 +7,9 @@ cd web && npm install && npm run dev      # http://localhost:5173
 npm run build
 ```
 
+- `.env.development` / `.env.production` point at https://divergent-api.style.dev. If it is unreachable the
+  map falls back to the fixture (header shows "API unreachable · fixture"). `?fixture` forces the fixture, `?api=<url>`
+  picks another API.
 - No `VITE_API_URL` → loads `fixtures/scenario_demo.json`; Explain / What-if / Survey use local previews (`src/offline.ts`).
 - `VITE_API_URL=https://<freestyle-url> npm run dev` → everything goes to Diego's API (`src/data.ts`).
 - Regenerate the fixture: `node fixtures/make_scenario_demo.mjs` (seeded, deterministic).

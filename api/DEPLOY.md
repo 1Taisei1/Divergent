@@ -44,3 +44,25 @@ Logs: `npx -y freestyle@latest vm exec divergent -- sudo journalctl -u divergent
 npx -y freestyle@latest vm pause divergent
 npx -y freestyle@latest vm start divergent
 ```
+
+## What-if clone flow (tested; ~5 s per step)
+A clone is a second VM, from a snapshot of the main one, whose API starts with sensor overrides applied
+(`SCENARIO_OVERRIDES`, JSON like the sim's `overrides`). The main URL is untouched.
+```bash
+F="npx -y freestyle@latest"
+$F vm pause divergent
+$F snapshot create divergent --slug divergent-base      # snapshot ids are global; use a new slug per run
+$F vm start divergent                                   # main comes back, same URL
+$F vm create --snapshot-id divergent-base --slug divergent-whatif
+$F vm exec divergent-whatif -- bash -lc 'sudo tee /etc/systemd/system/divergent-api.service.d/whatif.conf >/dev/null <<"EOF"
+[Service]
+Environment="SCENARIO_OVERRIDES={\"disable\":[\"S3\"]}"
+EOF
+sudo systemctl daemon-reload; sudo systemctl restart divergent-api'
+$F tls create --domain divergent-whatif.style.dev --from public --to vm=divergent-whatif,port=8000
+```
+- The quotes in `Environment=` matter: unescaped JSON makes the service fail to start.
+- Allow ~25 s after restart for the API to rebuild scenarios before the URL answers.
+- Move instead of disable: `{"move":{"S3":[4000,5000]}}`.
+- Cleanup: `$F vm delete divergent-whatif`, `$F snapshot delete divergent-base`.
+- For a live what-if with no clone, use `POST /scenario/{id}/whatif`.

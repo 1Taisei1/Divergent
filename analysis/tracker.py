@@ -47,6 +47,7 @@ def _snapshot(tr, t):
         "points": list(tr["points"]),
         "current": {"x": round(x, 1), "y": round(y, 1), "vx": round(vx, 2), "vy": round(vy, 2)},
         "ellipse": _ellipse(tr["kf"].P),
+        "truth_drone_id": tr["drone_id"],  # sim ground truth, for planning/metrics.py only (like Detection's)
     }
 
 
@@ -54,7 +55,7 @@ def run(raw):
     tracks = {}  # drone_id -> {id, kf, t (filter time), last_det_t, sensor_ids, points}
     tracks_by_t = {}
 
-    for t in range(raw["duration_s"]):
+    for t in range(raw["duration_s"] + 1):  # frames t = 0..duration inclusive, like sim/generate.py
         by_drone = {}
         for d in raw["detections_by_t"].get(t, []):
             if d["clutter"] or d["truth_drone_id"] is None:
@@ -64,7 +65,7 @@ def run(raw):
         for drone_id in sorted(by_drone):
             if drone_id not in tracks:
                 tracks[drone_id] = {
-                    "id": f"T{len(tracks) + 1}", "kf": _new_filter(by_drone[drone_id][0]),
+                    "id": f"T{len(tracks) + 1}", "drone_id": drone_id, "kf": _new_filter(by_drone[drone_id][0]),
                     "t": t, "last_det_t": t, "sensor_ids": set(), "points": [],
                 }
 

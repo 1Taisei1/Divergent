@@ -12,7 +12,7 @@ def _all_dets(raw):
 def test_shape_and_determinism():
     raw = fake_raw()
     assert raw == fake_raw()
-    assert sorted(raw["detections_by_t"]) == list(range(60))
+    assert sorted(raw["detections_by_t"]) == list(range(61))
     assert len([s for s in raw["sensors"] if s["side"] == "allied"]) == 3
     assert set(raw["truth_paths"]) == {"E1", "E2"}
     assert {l["team_id"] for l in raw["truth_launches"]} == {"LT1"}

@@ -3,6 +3,7 @@ import copy
 import importlib
 import logging
 
+from api.recon_fusion import fuse
 from sim.generate import generate
 
 log = logging.getLogger("pipeline")
@@ -46,6 +47,11 @@ def build_scenario(scenario_id, overrides=None, recon=None):
     tracks = _call("analysis.tracker", "run", {}, raw)
     origins, origin_grids = _call("analysis.origin", "run", ({}, {}), raw, tracks)
     teams = _call("analysis.launch_teams", "run", {}, raw, origins)
+    confirmed, fusion_alerts = {}, {}
+    if recon and recon.get("states"):  # recon sightings turn heat maps into pinpoints
+        seen = _call("planning.recon", "sightings", [], raw, recon["states"])
+        origins, origin_grids, teams, confirmed, fusion_alerts = fuse(
+            T, seen, origins, origin_grids, teams, (recon.get("route") or {}).get("id", "R1"))
     forecast = _call("analysis.forecast", "run", {}, raw, teams)
     exposure_grid, routes = _call("planning.exposure", "run", (empty_grid(), []), raw)
     last_grid = origin_grids.get(T) or origin_grids.get(max(origin_grids, default=0)) or empty_grid()
@@ -62,7 +68,8 @@ def build_scenario(scenario_id, overrides=None, recon=None):
         "exposure_grid": exposure_grid,
         "routes": routes,
         "recon": (recon or {}).get("states", {}).get(t),
-        "alerts": [],
+        "confirmed_sites": confirmed.get(t, []),
+        "alerts": list(fusion_alerts.get(t, [])),
     } for t in ts]
 
     alerts = _call("analysis.alerts", "run", {}, frames)

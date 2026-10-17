@@ -46,7 +46,7 @@ Folders: `sim/`, `api/`. Branch: `diego/*`. Start task 1 now.
   "Summarize in 3 short plain-English lines for an operator. Include confidence. Recommend, never decide." Return `{text}`.
   Fall back to a template string if there's no key.
 
-- [ ] **9. Recon endpoints.** `POST /recon/propose?t=N` → `planning.recon.propose`. `POST /recon/approve` `{route_id, operator, t}`
+- [x] **9. Recon endpoints.** `POST /recon/propose?t=N` → `planning.recon.propose`. `POST /recon/approve` `{route_id, operator, t}`
   → reject with 400 if `operator` is empty; otherwise call `planning.recon.fly`, merge the R1 detections into the sim
   detections, rebuild, and set `Frame.recon` per t. `POST /recon/abort` `{route_id, t}` → `fly(..., abort_t=t)` and rebuild.
   Paths are under `/scenario/{id}/`.

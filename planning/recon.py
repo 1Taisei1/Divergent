@@ -4,19 +4,26 @@ Surveillance only: no payload, engagement, or targeting logic anywhere.
 Nothing flies unless the route was approved by a named operator.
 """
 
+import heapq
 import math
 
-SPEED_MPS = 15.0
+import numpy as np
 
-PICK_RADIUS_M = 1500.0
+# The sim clip is 120 s, so the recon UAV has to be fast to reach a launch site and see it.
+SPEED_MPS = 100.0
+LOITER_S = 20
+
 VALUE_W = 0.6
-EXPOSURE_W = 1.5
-MAX_WAYPOINTS = 6
-MAX_PATH_M = 9000.0
+MAX_WAYPOINTS = 9
+MAX_PATH_M = 20000.0
+AVOID_EXPOSURE = 0.45   # planner never enters cells hotter than this; fly() auto-returns at 0.6
+EXPOSURE_COST = 10.0
+RDP_EPS_M = 200.0
+CELL_M = 100
 
 RISK_RETURN_THRESHOLD = 0.6
 
-DETECT_RANGE_M = 1000.0
+DETECT_RANGE_M = 1500.0  # also the range at which a launch site is pinpointed
 DETECT_SIGMA_M = 30.0
 RECON_SENSOR_ID = "R1"
 
@@ -73,97 +80,102 @@ def _path_length(points: list[tuple[float, float]]) -> float:
     return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:]))
 
 
-def _step_toward(pos, target, home_xy, total_len, exposure_grid):
-    """Point up to PICK_RADIUS_M from pos toward target that leaves budget to fly home and stays below the
-    auto-return risk; None if no such step of at least 100 m."""
-    if target is None:
-        return None
-    dist = math.hypot(target[0] - pos[0], target[1] - pos[1])
-    if dist < 1.0:
-        return None
-    step = min(PICK_RADIUS_M, dist)
-    while step >= 100.0:
-        x = pos[0] + (target[0] - pos[0]) * step / dist
-        y = pos[1] + (target[1] - pos[1]) * step / dist
-        if (total_len + step + math.hypot(x - home_xy[0], y - home_xy[1]) <= MAX_PATH_M
-                and _exposure_at(exposure_grid, x, y) <= RISK_RETURN_THRESHOLD):
-            return round(x, 1), round(y, 1)
-        step -= 100.0
-    return None
+def _arr(grid: dict, h: int = 100, w: int = 100) -> np.ndarray:
+    v = (grid or {}).get("values")
+    return np.array(v, dtype=float) if v else np.zeros((h, w))
+
+
+def _dijkstra(exp: np.ndarray, src: tuple[int, int]):
+    """8-neighbour shortest path on the grid; cost rises with exposure, hot cells are off limits."""
+    h, w = exp.shape
+    cost = np.full((h, w), np.inf)
+    dist = np.zeros((h, w))
+    prev: dict = {}
+    cost[src] = 0.0
+    pq = [(0.0, src)]
+    while pq:
+        c, (r, q) = heapq.heappop(pq)
+        if c > cost[r, q]:
+            continue
+        for dr in (-1, 0, 1):
+            for dq in (-1, 0, 1):
+                nr, nq = r + dr, q + dq
+                if (dr == 0 and dq == 0) or not (0 <= nr < h and 0 <= nq < w) or exp[nr, nq] > AVOID_EXPOSURE:
+                    continue
+                step = CELL_M * (1.4142 if dr and dq else 1.0)
+                nc = c + step * (1 + EXPOSURE_COST * exp[nr, nq])
+                if nc < cost[nr, nq]:
+                    cost[nr, nq] = nc
+                    dist[nr, nq] = dist[r, q] + step
+                    prev[(nr, nq)] = (r, q)
+                    heapq.heappush(pq, (nc, (nr, nq)))
+    return cost, dist, prev
+
+
+def _rdp(pts: list, eps: float) -> list:
+    if len(pts) < 3:
+        return pts
+    (x1, y1), (x2, y2) = pts[0], pts[-1]
+    seg = math.hypot(x2 - x1, y2 - y1) or 1e-9
+    d, idx = max(((abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / seg, i)
+                  for i, (x, y) in enumerate(pts[1:-1], 1)), default=(0, 0))
+    if d <= eps:
+        return [pts[0], pts[-1]]
+    return _rdp(pts[: idx + 1], eps)[:-1] + _rdp(pts[idx:], eps)
 
 
 def propose(raw: dict, frame: dict, exposure_grid: dict) -> dict:
-    """planning/recon.py propose per CONTRACT.md -> ReconRoute (status proposed)."""
+    """ReconRoute (status proposed): fly to the reachable spot whose 1.5 km view covers the most
+    forecast/origin heat, by the least exposed path, loiter, and come back the same way."""
     home = raw.get("home_base") or {"x": 0, "y": 0}
-    forecast = frame.get("forecast_heatmap") or {}
-    origin_heatmap = frame.get("origin_heatmap") or {}
-
-    def value_at(x: float, y: float) -> float:
-        return (
-            VALUE_W * _grid_value(forecast, x, y)
-            + (1 - VALUE_W) * _grid_value(origin_heatmap, x, y)
-        )
-
-    visited: list[tuple[float, float]] = [(home["x"], home["y"])]
-    total_len = 0.0
     home_xy = (home["x"], home["y"])
+    t_now = int(frame.get("t", 0))
+    exp = _arr(exposure_grid)
+    h, w = exp.shape
+    val = VALUE_W * _arr(frame.get("forecast_heatmap"), h, w) + (1 - VALUE_W) * _arr(frame.get("origin_heatmap"), h, w)
 
-    # highest-value cell on the whole map; used to head that way when nothing nearby has value
-    cell_m = int((forecast or origin_heatmap).get("cell_m") or 100)
-    target, target_value = None, 0.0
-    for gy in range(cell_m // 2, 10000, cell_m):
-        for gx in range(cell_m // 2, 10000, cell_m):
-            v = value_at(gx, gy)
-            if v > target_value:
-                target, target_value = (gx, gy), v
+    # gain[r, c] = heat visible from that cell (disk of DETECT_RANGE_M)
+    k = int(DETECT_RANGE_M // CELL_M)
+    pad = np.pad(val, k)
+    gain = np.zeros_like(val)
+    for dr in range(-k, k + 1):
+        for dc in range(-k, k + 1):
+            if dr * dr + dc * dc <= k * k:
+                gain += pad[k + dr:k + dr + h, k + dc:k + dc + w]
 
-    while len(visited) < MAX_WAYPOINTS and total_len < MAX_PATH_M:
-        best = None
-        best_score = -float("inf")
-        for dx in range(-int(PICK_RADIUS_M), int(PICK_RADIUS_M) + 1, 100):
-            for dy in range(-int(PICK_RADIUS_M), int(PICK_RADIUS_M) + 1, 100):
-                if dx * dx + dy * dy > PICK_RADIUS_M * PICK_RADIUS_M:
-                    continue
-                x, y = visited[-1][0] + dx, visited[-1][1] + dy
-                if not (0 <= x <= 10000 and 0 <= y <= 10000):
-                    continue
-                if any(math.hypot(x - vx, y - vy) < 1.0 for vx, vy in visited):
-                    continue
-                score = value_at(x, y) - EXPOSURE_W * _exposure_at(exposure_grid, x, y)
-                if score > best_score:
-                    best_score = score
-                    best = (x, y)
-        if best is None or best_score <= 0.0:
-            # nothing nearby is worth visiting: step toward the best cell, as far as the path budget allows
-            best = _step_toward(visited[-1], target, home_xy, total_len, exposure_grid)
-            if best is None:
-                break
-        step = math.hypot(best[0] - visited[-1][0], best[1] - visited[-1][1])
-        back = math.hypot(best[0] - home_xy[0], best[1] - home_xy[1])
-        if total_len + step + back > MAX_PATH_M:
-            break
-        visited.append(best)
-        total_len += step
+    src = (min(h - 1, int(home["y"] // CELL_M)), min(w - 1, int(home["x"] // CELL_M)))
+    cost, dist, prev = _dijkstra(exp, src)
+    time_left = int(raw.get("duration_s", 120)) - t_now - LOITER_S
+    reach_m = min(max(time_left, 0) * SPEED_MPS, MAX_PATH_M / 2)
+    ok = np.isfinite(cost) & (dist <= reach_m) & (dist > CELL_M)
+    best = None
+    if ok.any() and gain[ok].max() > 1e-6:
+        top = gain[ok].max()
+        good = ok & (gain >= 0.98 * top)
+        best = tuple(np.unravel_index(np.argmin(np.where(good, cost, np.inf)), cost.shape))
 
-    # return to home
-    if visited[-1] != home_xy:
-        visited.append(home_xy)
-
-    # drop the home point if the loop never left it
-    if len(visited) == 1:
+    if best is None:
         waypoints = [{"x": home["x"], "y": home["y"]}]
-        visited_vals = [value_at(home["x"], home["y"])]
+        info_gain = 0.0
     else:
-        waypoints = [{"x": round(x, 1), "y": round(y, 1)} for x, y in visited]
-        visited_vals = [value_at(x, y) for x, y in visited]
+        cells, cur = [], best
+        while cur != src:
+            cells.append(cur)
+            cur = prev[cur]
+        cells.append(src)
+        out = [home_xy] + [(c * CELL_M + CELL_M / 2, r * CELL_M + CELL_M / 2) for r, c in reversed(cells[:-1])]
+        eps = RDP_EPS_M
+        while True:
+            simple = _rdp(out, eps)
+            if 2 * len(simple) - 1 <= MAX_WAYPOINTS:
+                break
+            eps *= 1.5
+        pts = simple + simple[-2::-1]  # out and back on the same low-exposure path
+        waypoints = [{"x": round(float(x), 1), "y": round(float(y), 1)} for x, y in pts]
+        info_gain = min(1.0, float(gain[best]) / max(float(val.sum()), 1e-9))
 
-    info_gain = sum(visited_vals) / len(visited_vals) if visited_vals else 0.0
-
-    # risk = mean exposure along the path, sampled every 100 m
-    pts = [(w["x"], w["y"]) for w in waypoints]
-    risk = _mean_exposure_along(pts, exposure_grid)
-
-    route = {
+    risk = _mean_exposure_along([(q["x"], q["y"]) for q in waypoints], exposure_grid)
+    return {
         "id": "R1",
         "waypoints": waypoints,
         "info_gain": round(info_gain, 4),
@@ -172,9 +184,8 @@ def propose(raw: dict, frame: dict, exposure_grid: dict) -> dict:
         "status": "proposed",
         "approved_by": None,
         "approved_at": None,
-        "log": [{"t": frame.get("t", 0), "event": "proposed"}],
+        "log": [{"t": t_now, "event": "proposed"}],
     }
-    return route
 
 
 def _mean_exposure_along(points: list[tuple[float, float]], exposure_grid: dict, step_m: float = 100.0) -> float:
@@ -246,6 +257,8 @@ def fly(
     for a, b in zip(waypoints, waypoints[1:]):
         legs.append((a, b, math.hypot(b[0] - a[0], b[1] - a[1])))
 
+    apex = max(range(len(waypoints)), key=lambda i: math.hypot(waypoints[i][0] - home["x"], waypoints[i][1] - home["y"]))
+    loiter_left = 0
     pos = waypoints[0]
     leg_idx = 0
     leg_dist = 0.0
@@ -258,7 +271,9 @@ def fly(
     return_dist = 0.0
 
     while t <= duration and status not in ("returned", "aborted"):
-        if not returning:
+        if not returning and loiter_left > 0:
+            loiter_left -= 1  # hold over the target and watch
+        elif not returning:
             if leg_idx >= len(legs):
                 # finished the planned loop; head home
                 returning = True
@@ -274,6 +289,8 @@ def fly(
                     pos = b
                     leg_idx += 1
                     leg_dist = 0.0
+                    if leg_idx == apex and apex > 0:
+                        loiter_left = LOITER_S
                 else:
                     frac = leg_dist / seg_len if seg_len > 0 else 0.0
                     pos = (a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac)
@@ -348,3 +365,31 @@ def fly(
         t += 1
 
     return recon_by_t, detections_by_t, flight_log
+
+
+SITE_SIGMA_M = 25.0
+SITE_RADIUS_M = 60.0
+
+
+def sightings(raw: dict, recon_by_t: dict) -> list[dict]:
+    """Launch sites the recon drone can see, one entry per second in view: {t, team_id, x, y, radius_m}.
+    The camera sees a team's current site (its latest launch point) within DETECT_RANGE_M, with a
+    fixed small position error per site. # ponytail: truth_launches stands in for the camera model."""
+    launches = sorted(raw.get("truth_launches") or [], key=lambda l: l["t"])
+    rng = np.random.default_rng(int(raw.get("seed", 0)) + 101)
+    jitter: dict = {}
+    out = []
+    for t in sorted(recon_by_t):
+        st = recon_by_t[t]
+        current = {}
+        for l in launches:
+            if l["t"] <= t:
+                current[l["team_id"]] = l
+        for team, l in current.items():
+            if math.hypot(st["x"] - l["x"], st["y"] - l["y"]) <= DETECT_RANGE_M:
+                key = (team, l["x"], l["y"])
+                if key not in jitter:
+                    jitter[key] = rng.normal(0, SITE_SIGMA_M, 2)
+                out.append({"t": t, "team_id": team, "x": round(l["x"] + float(jitter[key][0]), 1),
+                            "y": round(l["y"] + float(jitter[key][1]), 1), "radius_m": SITE_RADIUS_M})
+    return out

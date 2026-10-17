@@ -51,7 +51,7 @@ def run(raw, origins_by_t):
     assigned = set()
     teams_by_t = {}
 
-    for t in range(raw["duration_s"]):
+    for t in range(raw["duration_s"] + 1):
         latest = {o["track_id"]: o["peak"] for o in origins_by_t.get(t, [])}
         for track_id in sorted(latest):
             if track_id not in assigned:

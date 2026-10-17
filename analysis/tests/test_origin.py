@@ -43,7 +43,7 @@ def test_output_is_json_serializable():
 
 def test_heatmap():
     raw, _, origins_by_t, heatmap_by_t = _run()
-    assert sorted(heatmap_by_t) == list(range(raw["duration_s"]))
+    assert sorted(heatmap_by_t) == list(range(raw["duration_s"] + 1))
     assert from_grid(heatmap_by_t[0]).max() == 0  # nothing tracked yet
     final = heatmap_by_t[raw["duration_s"] - 1]
     assert (final["width"], final["height"], final["cell_m"]) == (100, 100, 100)

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import urllib.request
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -9,8 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.pipeline import build_scenario
-from planning import recon
-from sim.generate import PRESETS, generate
+from sim.generate import PRESETS
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="c0mpiled-14 API (simulated data)")
@@ -21,8 +21,9 @@ CACHE = {}
 
 @app.on_event("startup")
 def _warm():
+    ov = json.loads(os.environ.get("SCENARIO_OVERRIDES") or "null")  # set on a what-if clone VM
     for sid in PRESETS:
-        CACHE[sid] = build_scenario(sid)
+        CACHE[sid] = build_scenario(sid, overrides=ov)
 
 
 def _get(sid):
@@ -118,77 +119,73 @@ def explain(sid: str, t: int = 0):
     return {"text": _llm(s) or _template(s)}
 
 
-# Recon (surveillance only). Nothing flies without approve + a named operator; guardrails live in planning/recon.py.
-RECON = {}  # sid -> latest ReconRoute
+# ---- recon (surveillance only; nothing flies without a named operator's approval) ----
+PROPOSED = {}  # (sid, route_id) -> ReconRoute
+FLIGHTS = {}   # sid -> (approved route, t_start); lets abort re-fly the same route
 
 
-class ReconApprove(BaseModel):
+class Approve(BaseModel):
     route_id: str
-    operator: str
+    operator: str = ""
     t: int
 
 
-class ReconAbort(BaseModel):
+class Abort(BaseModel):
     route_id: str
     t: int
 
 
-def _frame_at(sid, t):
-    frames = _get(sid)["frames"]
-    if not 0 <= t < len(frames):
-        raise HTTPException(400, "t out of range")
-    return frames[t]
+def _recon_ctx(sid):
+    from planning import recon
+    from sim.generate import generate
+    return recon, generate(sid), _get(sid)
 
 
-def _route(sid, route_id):
-    route = RECON.get(sid)
-    if not route or route["id"] != route_id:
-        raise HTTPException(404, f"no proposed survey route {route_id}; call recon/propose first")
-    return route
-
-
-def _fly(sid, route, abort_t=None):
-    """Fly an approved route from its approve time and return the recomputed Scenario (not cached)."""
-    raw = generate(sid)
-    grid = _frame_at(sid, route["approved_at"])["exposure_grid"]
-    try:
-        states, detections, *rest = recon.fly(raw, route, route["approved_at"], grid, abort_t)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    flown = {**route, "log": rest[0] if rest else route["log"]}
-    events = [e["event"] for e in flown["log"]]
-    flown["status"] = "aborted" if "aborted" in events else "returned" if "returned" in events else "flying"
-    return build_scenario(sid, recon={"route": flown, "states": states, "detections": detections})
+def _fly(sid, route, t_start, abort_t=None):
+    recon, raw, sc = _recon_ctx(sid)
+    grid = sc["frames"][0]["exposure_grid"]
+    states, dets, log = recon.fly(raw, route, t_start, grid, abort_t=abort_t)
+    route = {**route, "log": log}
+    ends = [e["event"] for e in log if e["event"] in ("returned", "aborted")]
+    route["status"] = ends[-1] if ends else "flying"
+    out = build_scenario(sid, recon={"route": route, "states": states, "detections": dets})
+    for e in log:  # surface auto-return on the actions feed
+        if e["event"] == "auto_return" and 0 <= e["t"] < len(out["frames"]):
+            out["frames"][e["t"]]["alerts"].append({
+                "t": e["t"], "kind": "recon_auto_return", "ref_id": route["id"],
+                "message": f"Recon {route['id']} returning home: risk {e.get('risk_now')} above limit.",
+                "recommended_action": "Review the route before re-approving."})
+    return out
 
 
 @app.post("/scenario/{sid}/recon/propose")
 def recon_propose(sid: str, t: int = 0):
-    frame = _frame_at(sid, t)
-    route = recon.propose(generate(sid), frame, frame["exposure_grid"])
-    RECON[sid] = route
+    recon, raw, sc = _recon_ctx(sid)
+    if not 0 <= t < len(sc["frames"]):
+        raise HTTPException(400, "t out of range")
+    f = sc["frames"][t]
+    route = recon.propose(raw, f, f["exposure_grid"])
+    PROPOSED[(sid, route["id"])] = route
     return route
 
 
 @app.post("/scenario/{sid}/recon/approve")
-def recon_approve(sid: str, body: ReconApprove):
-    operator = body.operator.strip()
-    if not operator:
-        raise HTTPException(400, "an operator name is required to approve a survey")
-    _frame_at(sid, body.t)
-    route = _route(sid, body.route_id)
-    route = {**route, "status": "approved", "approved_by": operator, "approved_at": body.t,
-             "log": [e for e in route["log"] if e["event"] == "proposed"]
-             + [{"t": body.t, "event": "approved", "by": operator}]}
-    RECON[sid] = route
-    return _fly(sid, route)
+def recon_approve(sid: str, body: Approve):
+    if not body.operator.strip():
+        raise HTTPException(400, "operator name required; nothing flies without approval")
+    route = PROPOSED.get((sid, body.route_id))
+    if not route:
+        raise HTTPException(404, "propose a route first")
+    route = {**route, "status": "approved", "approved_by": body.operator.strip(),
+             "approved_at": datetime.now(timezone.utc).isoformat(),
+             "log": route.get("log", []) + [{"t": body.t, "event": "approved", "by": body.operator.strip()}]}
+    FLIGHTS[sid] = (route, body.t)
+    return _fly(sid, route, body.t)
 
 
 @app.post("/scenario/{sid}/recon/abort")
-def recon_abort(sid: str, body: ReconAbort):
-    route = _route(sid, body.route_id)
-    if route["status"] != "approved":
-        raise HTTPException(400, "survey is not approved, nothing to abort")
-    _frame_at(sid, body.t)
-    if body.t < route["approved_at"]:
-        raise HTTPException(400, "abort time is before the approve time")
-    return _fly(sid, route, abort_t=body.t)
+def recon_abort(sid: str, body: Abort):
+    if sid not in FLIGHTS or FLIGHTS[sid][0]["id"] != body.route_id:
+        raise HTTPException(404, "no approved flight for that route")
+    route, t_start = FLIGHTS[sid]
+    return _fly(sid, route, t_start, abort_t=body.t)

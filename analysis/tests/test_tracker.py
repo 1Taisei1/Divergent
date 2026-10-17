@@ -51,10 +51,18 @@ def test_track_goes_lost_and_freezes():
     assert t1[last + 5] == t1[59]  # frozen, still reported
 
 
+def test_last_frame_is_included():
+    raw = fake_raw()
+    tracks_by_t = tracker.run(raw)
+    assert sorted(tracks_by_t) == list(range(raw["duration_s"] + 1))  # sim and pipeline use t = 0..duration
+    assert len(tracks_by_t[raw["duration_s"]]) == 2
+
+
 def test_track_fields():
     final = tracker.run(fake_raw())[59]
     t1 = next(tr for tr in final if tr["id"] == "T1")
     assert t1["sensor_ids"] == ["S1", "S2"]
+    assert t1["truth_drone_id"] == "E1"  # for planning/metrics.py
     assert t1["points"][0]["t"] == 10
     assert t1["ellipse"]["major_m"] >= t1["ellipse"]["minor_m"] > 0
     assert 0 <= t1["ellipse"]["angle_deg"] < 180

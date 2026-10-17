@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fake import fake_raw, fake_forecast, HOME_BASE  # noqa: E402
-from recon import propose, fly  # noqa: E402
+from recon import propose, fly, SPEED_MPS, DETECT_RANGE_M  # noqa: E402
 from exposure import run as exposure_run  # noqa: E402
 
 
@@ -66,9 +66,9 @@ def test_flight_starts_and_ends_at_home():
     ts = sorted(recon_by_t)
     first, last = recon_by_t[ts[0]], recon_by_t[ts[-1]]
     assert first["status"] in ("flying", "returning")
-    # position at t_start is home (first step of 15 m/s along first leg)
+    # position at t_start is home (first step of SPEED_MPS along first leg)
     d0 = math.hypot(first["x"] - HOME_BASE["x"], first["y"] - HOME_BASE["y"])
-    assert d0 <= 20.0
+    assert d0 <= SPEED_MPS + 5.0
     assert last["status"] in ("flying", "returning", "returned")
 
 
@@ -144,21 +144,7 @@ def test_detections_from_truth_paths():
             assert d["truth_drone_id"] is not None
             # within detection range of the drone's position at that t
             st = recon_by_t[t]
-            assert math.hypot(d["x"] - st["x"], d["y"] - st["y"]) <= 1000.0 + 1e-6
-
-
-def test_far_hotspot_still_leaves_home_within_budget():
-    # value only far from home (beyond the 9000 m round trip): the route still heads that way and gets back
-    raw = fake_raw()
-    eg, _routes = exposure_run(raw)
-    grid = {"cell_m": 100, "width": 100, "height": 100, "values": [[0.0] * 100 for _ in range(100)]}
-    grid["values"][75][15] = 1.0  # ~(1550, 7550), ~9500 m from home
-    frame = {**_frame(), "forecast_heatmap": grid, "origin_heatmap": grid}
-    route = propose(raw, frame, eg)
-    pts = [(w["x"], w["y"]) for w in route["waypoints"]]
-    assert len(pts) >= 3 and pts[0] == pts[-1] == (HOME_BASE["x"], HOME_BASE["y"])
-    path = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
-    assert path <= 9000 + 1e-6
+            assert math.hypot(d["x"] - st["x"], d["y"] - st["y"]) <= DETECT_RANGE_M + 1e-6
 
 
 def test_route_that_never_leaves_home_ends_returned():
