@@ -95,14 +95,22 @@ Detections from the recon drone use `sensor_id: "R1"`.
 { "t": 52, "kind": "new_track", "message": "New track T3 detected by S2 and S4.",
   "recommended_action": "Monitor T3; origin estimate pending.", "ref_id": "T3" }
 ```
-`kind`: `"new_track" | "track_lost" | "origin_confident" | "launch_team_moved" | "launch_forecast" | "route_exposed" | "recon_auto_return"`.
+`kind`: `"new_track" | "track_lost" | "origin_confident" | "launch_team_moved" | "launch_forecast" | "route_exposed" | "recon_auto_return" | "launch_site_confirmed"`.
+
+### ConfirmedSite (recon pinpoint; added Oct 17, additive)
+```json
+{ "team_id": "LT1", "x": 1472.0, "y": 3035.1, "radius_m": 60, "first_seen_t": 81, "last_seen_t": 119, "source": "R1" }
+```
+Present in `Frame.confirmed_sites` once the approved recon drone has seen a launch site (it stays, last known position,
+after the drone leaves). The matching `OriginEstimate`s snap to this point (`radius_m` 60, confidence >= 0.97), the matching
+`LaunchTeam` gets `"confirmed": true`, and `origin_heatmap` collapses to a spike there. Frontend: draw a pin, fade the heat.
 
 ### Frame
 ```json
 { "t": 52,
   "detections": [], "tracks": [], "origins": [], "launch_teams": [],
   "origin_heatmap": {}, "forecast_heatmap": {}, "exposure_grid": {},
-  "routes": [], "recon": null, "alerts": [] }
+  "routes": [], "recon": null, "confirmed_sites": [], "alerts": [] }
 ```
 `detections` holds ONLY detections with this `t`; frontend accumulates up to slider time.
 
@@ -175,7 +183,8 @@ run(raw, frames: list[Frame]) -> Metrics
 # planning/recon.py          (Ali)
 propose(raw, frame: Frame, exposure_grid: Grid) -> ReconRoute
 fly(raw, route: ReconRoute, t_start: int, exposure_grid: Grid, abort_t: int | None = None)
-    -> tuple[dict[int, ReconState], dict[int, list[Detection]]]   # positions + new detections from R1
+    -> tuple[dict[int, ReconState], dict[int, list[Detection]], list[log]]   # positions, new R1 detections, flight log
+sightings(raw, recon_by_t) -> list[{t, team_id, x, y, radius_m}]   # launch sites the recon drone can see
 ```
 
 ### Recon guardrails (must be enforced in `planning/recon.py` (Ali))
