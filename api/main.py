@@ -7,6 +7,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from api.pipeline import build_scenario
@@ -14,6 +15,7 @@ from sim.generate import PRESETS
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="c0mpiled-14 API (simulated data)")
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # scenarios are ~18 MB of repeated grids
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 CACHE = {}
