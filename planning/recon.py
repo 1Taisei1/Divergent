@@ -301,7 +301,7 @@ def fly(
                 break
             a, b, seg_len = return_legs[return_idx]
             return_dist += SPEED_MPS
-            if seg_len > 0 and return_dist >= seg_len:
+            if return_dist >= seg_len:  # also covers a zero-length leg (already home)
                 pos = b
                 return_idx += 1
                 return_dist = 0.0
