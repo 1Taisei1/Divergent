@@ -121,7 +121,7 @@ export default function App() {
               </button>
             ))}
           </nav>
-          {scenario && tab === 'Layers' && <LayersTab layers={layers} setLayers={setLayers} />}
+          {scenario && tab === 'Layers' && <LayersTab scenario={scenario} layers={layers} setLayers={setLayers} />}
           {scenario && tab === 'Alerts' && <AlertsTab scenario={scenario} t={t} onJump={(x) => { setPlaying(false); setT(x); }} />}
           {scenario && tab === 'Explain' && <ExplainTab scenario={scenario} t={t} />}
           {scenario && tab === 'Survey' && (

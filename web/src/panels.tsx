@@ -5,7 +5,8 @@ import type { Layers, LayerKey } from './MapView';
 import { frameAt, LAYERS } from './MapView';
 import type { Alert, ReconRoute, Scenario } from './types';
 
-export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l: Layers) => void }) {
+export function LayersTab({ scenario, layers, setLayers }: { scenario: Scenario; layers: Layers; setLayers: (l: Layers) => void }) {
+  const sites = scenario.launch_site_options ?? [];
   return (
     <div className="panel">
       {(Object.keys(LAYERS) as LayerKey[]).map((k) => (
@@ -22,7 +23,19 @@ export function LayersTab({ layers, setLayers }: { layers: Layers; setLayers: (l
         <div><i style={{ background: '#ffe14d' }} /> Track</div>
         <div><i style={{ background: '#ff8a3d' }} /> Likely launch area</div>
         <div><i style={{ background: '#a070ff' }} /> Next-launch forecast</div>
+        <div><i style={{ background: '#28dc82' }} /> Our safe launch area</div>
       </div>
+      {sites.length > 0 && (
+        <div className="sites">
+          <div className="alert-meta">Our safest launch sites (hardest for enemy sensors to trace back)</div>
+          {sites.map((o, i) => (
+            <div key={i} className="site-row">
+              <span className="launch-site small">{i + 1}</span>
+              <div><b>({o.x}, {o.y}) m · {pct(o.concealment)}</b><div className="hint">{o.reason}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
       <p className="hint">Click a track to see which sensors fed it. Right-click an allied sensor for what-if.</p>
     </div>
   );
@@ -138,10 +151,13 @@ export function SurveyTab({ scenario, t, proposed, setProposed, proposedAt, onSc
   );
 }
 
+// The API may send null for a metric it couldn't compute; show a dash rather than a misleading 0.
+const num = (v: number | null | undefined, unit: string) => (typeof v === 'number' && Number.isFinite(v) ? `${Math.round(v)}${unit}` : '–');
+
 export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
   const m = scenario.metrics;
   if (!m) return <div className="panel empty">No metrics for this scenario yet.</div>;
-  const pts = Object.entries(m.origin_error_m_by_t).map(([k, v]) => ({ t: Number(k), v })).sort((a, b) => a.t - b.t);
+  const pts = Object.entries(m.origin_error_m_by_t ?? {}).filter(([, v]) => typeof v === 'number').map(([k, v]) => ({ t: Number(k), v })).sort((a, b) => a.t - b.t);
   const first = pts.find((p) => p.t === 30) ?? pts[0];
   const now = [...pts].reverse().find((p) => p.t <= t) ?? pts[pts.length - 1];
   const W = 300, H = 120, P = 24;
@@ -153,9 +169,9 @@ export function MetricsTab({ scenario, t }: { scenario: Scenario; t: number }) {
     <div className="panel">
       <div className="big-numbers">
         <div><span>Origin error at t = {first?.t ?? '–'} s</span><b>{first ? `${Math.round(first.v)} m` : '–'}</b></div>
-        <div><span>Origin error at t = {now?.t ?? '–'} s</span><b className="ok">{now ? `${Math.round(now.v)} m` : '–'}</b></div>
-        <div><span>Track RMSE</span><b>{Math.round(m.track_rmse_m)} m</b></div>
-        <div><span>Clutter filtered</span><b>{Math.round(m.clutter_filtered_pct)}%</b></div>
+        <div><span>Origin error at t = {now?.t ?? '–'} s</span><b className={now && first && now.t !== first.t ? (now.v <= first.v ? 'ok' : 'bad') : ''}>{now ? `${Math.round(now.v)} m` : '–'}</b></div>
+        <div><span>Track RMSE</span><b>{num(m.track_rmse_m, ' m')}</b></div>
+        <div><span>Clutter filtered</span><b>{num(m.clutter_filtered_pct, '%')}</b></div>
       </div>
       {pts.length > 1 && (
         <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Origin error over time">

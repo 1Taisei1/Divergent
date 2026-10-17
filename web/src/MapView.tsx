@@ -20,11 +20,15 @@ export const LAYERS = {
   exposure: 'Enemy sensor coverage',
   routes: 'Friendly routes',
   suggestion: 'Sensor suggestion',
+  launchSites: 'Our safest launch sites',
+  launchHeat: 'Our launch concealment map',
   recon: 'Survey route + drone',
 } as const;
 export type LayerKey = keyof typeof LAYERS;
 export type Layers = Record<LayerKey, boolean>;
-export const ALL_LAYERS = Object.fromEntries(Object.keys(LAYERS).map((k) => [k, true])) as Layers;
+// Off by default: on most scenarios nearly the whole map is hidden from enemy sensors, so the wash is noise until asked for.
+const OFF_BY_DEFAULT: LayerKey[] = ['launchHeat'];
+export const ALL_LAYERS = Object.fromEntries(Object.keys(LAYERS).map((k) => [k, !OFF_BY_DEFAULT.includes(k as LayerKey)])) as Layers;
 
 const BOUNDS: L.LatLngBoundsExpression = [ll(0, 0), ll(MAP_SIZE, MAP_SIZE)];
 const C = { allied: '#4da3ff', enemy: '#ff4d4d', track: '#ffe14d', safe: '#3ddc84', amber: '#ffb020', dim: 0.15 };
@@ -32,6 +36,8 @@ const RISK = { low: C.safe, medium: C.amber, high: C.enemy };
 const GRID_LINES = Array.from({ length: MAP_SIZE / 1000 + 1 }, (_, i) => i * 1000);
 
 const plusIcon = L.divIcon({ className: '', html: '<div class="suggest-plus">+</div>', iconSize: [40, 40], iconAnchor: [20, 20] });
+const siteIcon = (n: number) =>
+  L.divIcon({ className: '', html: `<div class="launch-site">${n}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
 const droneIcon = L.divIcon({ className: '', html: '<div class="recon-diamond"></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
 
 export function frameAt(s: Scenario, t: number): Frame | undefined {
@@ -103,6 +109,9 @@ export default function MapView(p: Props) {
           )}
           {on.forecast && hasHeat(frame?.forecast_heatmap) && (
             <ImageOverlay url={gridImage(frame.forecast_heatmap, RAMPS.forecast)} bounds={gridBounds(frame.forecast_heatmap)} />
+          )}
+          {on.launchHeat && hasHeat(s.launch_site_grid) && (
+            <ImageOverlay url={gridImage(s.launch_site_grid, RAMPS.launch)} bounds={gridBounds(s.launch_site_grid)} />
           )}
           {on.originHeat && hasHeat(frame?.origin_heatmap) && (
             <ImageOverlay url={gridImage(frame.origin_heatmap, RAMPS.origin)} bounds={gridBounds(frame.origin_heatmap)} />
@@ -221,6 +230,14 @@ export default function MapView(p: Props) {
             </Tooltip>
           </Marker>
         )}
+
+        {on.launchSites && (s.launch_site_options ?? []).map((o, i) => (
+          <Marker key={`site-${i}`} position={ll(o.x, o.y)} icon={siteIcon(i + 1)}>
+            <Tooltip direction="top" offset={[0, -16]} className="wide-tip">
+              <b>Our launch site #{i + 1}</b> · concealment {pct(o.concealment)}<br />{o.reason}
+            </Tooltip>
+          </Marker>
+        ))}
 
         {on.recon && p.reconRoute && (
           <>

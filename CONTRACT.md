@@ -70,6 +70,15 @@ Detections from the recon drone use `sensor_id: "R1"`.
 { "x": 3500, "y": 5200, "uncertainty_reduction": 0.31, "reason": "Covers the gap west of S2 where T1 and T3 originate." }
 ```
 
+### LaunchSiteOption ("where can our team launch without being traced")
+```json
+{ "x": 8450, "y": 950, "concealment": 1.0, "exposure_at_site": 0.0, "distance_to_coverage_m": 3400,
+  "nearest_enemy_sensor": "ES2",
+  "reason": "3.4 km outside ES2 coverage; the first 1.5 km of flight is unobserved." }
+```
+The reverse of origin estimation: a launch is hard to trace back when the site is outside enemy coverage, far from
+its edge, and the first leg of flight is unobserved. `distance_to_coverage_m` is null when no enemy sensor is active.
+
 ### ReconRoute (surveillance only, human approved)
 ```json
 { "id": "R1", "waypoints": [{ "x": 8000, "y": 1000 }],
@@ -118,8 +127,11 @@ after the drone leaves). The matching `OriginEstimate`s snap to this point (`rad
 ```json
 { "id": "demo", "name": "Two launch teams, cluttered sensors", "seed": 42,
   "map": { "width_m": 10000, "height_m": 10000, "cell_m": 100 },
-  "duration_s": 120, "sensors": [], "sensor_suggestion": null, "recon_route": null, "metrics": null, "frames": [] }
+  "duration_s": 120, "sensors": [], "sensor_suggestion": null,
+  "launch_site_grid": null, "launch_site_options": [],
+  "recon_route": null, "metrics": null, "frames": [] }
 ```
+`launch_site_grid` is a Grid of concealment (0..1, 1 = hardest to trace); static per scenario, like `sensor_suggestion`.
 Preset ids: `demo`, `single`, `swarm`, `sparse`.
 
 ---
@@ -176,6 +188,9 @@ run(raw, launch_teams_by_t) -> dict[int, Grid]               # forecast_heatmap 
 
 # analysis/sensor_suggest.py (Leo)
 run(raw, origin_heatmap_final: Grid) -> SensorSuggestion
+
+# planning/launch_sites.py   (Ali) — friendly launch-site concealment, the reverse of origin.py
+run(raw, exposure_grid: Grid) -> tuple[Grid, list[LaunchSiteOption]]   # up to 3 options within 4 km of home_base
 
 # planning/metrics.py        (Ali) — accuracy scoreboard vs simulator ground truth
 run(raw, frames: list[Frame]) -> Metrics

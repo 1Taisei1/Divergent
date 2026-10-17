@@ -54,6 +54,7 @@ def build_scenario(scenario_id, overrides=None, recon=None):
             T, seen, origins, origin_grids, teams, (recon.get("route") or {}).get("id", "R1"))
     forecast = _call("analysis.forecast", "run", {}, raw, teams)
     exposure_grid, routes = _call("planning.exposure", "run", (empty_grid(), []), raw)
+    launch_grid, launch_options = _call("planning.launch_sites", "run", (None, []), raw, exposure_grid)
     last_grid = origin_grids.get(T) or origin_grids.get(max(origin_grids, default=0)) or empty_grid()
     suggestion = _call("analysis.sensor_suggest", "run", None, raw, last_grid)
 
@@ -80,5 +81,6 @@ def build_scenario(scenario_id, overrides=None, recon=None):
     return {
         "id": raw["id"], "name": raw["name"], "seed": raw["seed"], "map": raw["map"],
         "duration_s": T, "sensors": raw["sensors"], "sensor_suggestion": suggestion,
+        "launch_site_grid": launch_grid, "launch_site_options": launch_options,
         "recon_route": (recon or {}).get("route"), "metrics": metrics, "frames": frames,
     }
