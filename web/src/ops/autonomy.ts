@@ -8,9 +8,12 @@ import type { Layer } from '@deck.gl/core';
 import { IconLayer, LineLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import type { Grid, Point } from '../types';
 import { HOME_BASE } from './geo3d';
+import { AFFIL, natoIcon } from './symbols';
 
+export type Box = { x0: number; y0: number; x1: number; y1: number };
 export interface MissionConfig {
-  geofence: { x0: number; y0: number; x1: number; y1: number };
+  geofence: Box; // where the drone may fly
+  area?: Box | null; // what the operator asked to map (null = everything inside the geofence)
   home: Point;
   speedMs: number;
   footprintM: number; // camera footprint radius on the ground
@@ -80,7 +83,7 @@ const BEAM = [3, 2]; // lookahead: keep 3 first legs, 2 second legs each, then t
 const DISCOUNT = [1, 0.7, 0.5];
 const SUBSTEP_S = 2, BREADCRUMB_M = 60, ARRIVE_M = 1;
 const SITE_MIN_CONF = 0.25, SITE_DEDUPE_M = 500, SIGHTING_GAP_S = 60;
-const HEAT_REFRESH_S = 15; // the uncertainty heat redraws at most this often while flying (and after every leg)
+const HEAT_REFRESH_S = 8; // the uncertainty heat redraws at most this often while flying (and after every leg)
 
 const AIRBORNE = new Set<MissionPhase>(['mapping', 'planning', 'flying', 'updating', 'returning']);
 export const isAirborne = (p: MissionPhase) => AIRBORNE.has(p);
@@ -93,17 +96,18 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 const r10 = (v: number) => Math.round(v / 10) * 10;
 const at10 = (q: Point) => `(${r10(q.x)}, ${r10(q.y)})`;
 const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
-const inFence = (cfg: MissionConfig, x: number, y: number) => {
-  const g = cfg.geofence;
-  return x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1;
-};
+const inBox = (g: Box, x: number, y: number) => x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1;
+const inFence = (cfg: MissionConfig, x: number, y: number) => inBox(cfg.geofence, x, y);
+// Value only counts inside the chosen survey area; the drone may still transit anywhere inside the geofence.
+const inArea = (cfg: MissionConfig, x: number, y: number) => inFence(cfg, x, y) && (!cfg.area || inBox(cfg.area, x, y));
 function sample(g: Grid | null, x: number, y: number): number {
   if (!g || !g.values.length) return 0;
   const c = Math.min(g.width - 1, Math.max(0, Math.floor(x / g.cell_m)));
   const r = Math.min(g.height - 1, Math.max(0, Math.floor(y / g.cell_m)));
   return g.values[r]?.[c] ?? 0;
 }
-const fenceKey = (cfg: MissionConfig) => { const g = cfg.geofence; return `${g.x0},${g.y0},${g.x1},${g.y1}`; };
+const boxKey = (g: Box) => `${g.x0},${g.y0},${g.x1},${g.y1}`;
+const fenceKey = (cfg: MissionConfig) => `${boxKey(cfg.geofence)}|${cfg.area ? boxKey(cfg.area) : 'all'}`;
 
 // Prior normalised to 0..1 inside the geofence, plus the planner weights and the valuable-area mask. Cached per grid.
 type PriorInfo = { norm: Float32Array; w: Float32Array; covW: Float32Array; valuable: Int32Array; mass: number; fenceCells: number };
@@ -121,7 +125,7 @@ function priorInfo(prior: Grid | null, cfg: MissionConfig): PriorInfo {
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) {
       const x = (c + 0.5) * CELL, y = (r + 0.5) * CELL;
-      if (!inFence(cfg, x, y)) continue;
+      if (!inArea(cfg, x, y)) continue;
       inside[r * N + c] = 1;
       fenceCells++;
       const v = Math.max(0, sample(prior, x, y));
@@ -163,7 +167,7 @@ function uncertaintyOf(covered: Float32Array, info: PriorInfo, cfg: MissionConfi
     const row = new Array<number>(N);
     for (let c = 0; c < N; c++) {
       const i = r * N + c;
-      row[c] = inFence(cfg, (c + 0.5) * CELL, (r + 0.5) * CELL) ? (1 - covered[i]) * (HAZE + (1 - HAZE) * info.norm[i]) : 0;
+      row[c] = inArea(cfg, (c + 0.5) * CELL, (r + 0.5) * CELL) ? (1 - covered[i]) * (HAZE + (1 - HAZE) * info.norm[i]) : 0;
     }
     values.push(row);
   }
@@ -241,6 +245,14 @@ function lattice(cfg: MissionConfig): Point[] {
   const g = cfg.geofence, pts: Point[] = [];
   const nx = Math.max(1, Math.floor((g.x1 - g.x0) / LATTICE_M)), ny = Math.max(1, Math.floor((g.y1 - g.y0) / LATTICE_M));
   for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) pts.push({ x: g.x0 + ((g.x1 - g.x0) * i) / nx, y: g.y0 + ((g.y1 - g.y0) * j) / ny });
+  const a = cfg.area;
+  if (a) {
+    const step = LATTICE_M / 1.5, ax = Math.max(1, Math.round((a.x1 - a.x0) / step)), ay = Math.max(1, Math.round((a.y1 - a.y0) / step));
+    for (let j = 0; j <= ay; j++) for (let i = 0; i <= ax; i++) {
+      const q = { x: a.x0 + ((a.x1 - a.x0) * i) / ax, y: a.y0 + ((a.y1 - a.y0) * j) / ay };
+      if (inFence(cfg, q.x, q.y)) pts.push(q);
+    }
+  }
   latticeCache.set(key, pts);
   return pts;
 }
@@ -275,8 +287,24 @@ function planNext(s: MissionState, cfg: MissionConfig, info: PriorInfo, threat: 
   const budget = (s.battery * cfg.enduranceS - RESERVE_S) * cfg.speedMs;
   const stats = { risk: 0, energy: 0 };
   const lvl1 = scoreLegs(s.pos, s.covered, info, cfg, threat, budget, stats);
-  // Nothing worth flying for: every feasible leg sweeps less than ~1 cell of prime value.
-  if (!lvl1.legs.length || lvl1.legs[0].gain < 1) return null;
+  // Nothing worth flying for within one leg: if the chosen survey area is further away, transit toward it
+  // (straight legs of at most MAX_LEG, still under the risk limit and the battery reserve); otherwise done.
+  if (!lvl1.legs.length || lvl1.legs[0].gain < 1) {
+    const a = cfg.area;
+    if (!a || inBox(a, s.pos.x, s.pos.y)) return null;
+    const cx = (a.x0 + a.x1) / 2, cy = (a.y0 + a.y1) / 2;
+    const nx = Math.min(a.x1, Math.max(a.x0, s.pos.x)), ny = Math.min(a.y1, Math.max(a.y0, s.pos.y));
+    const dc = Math.hypot(cx - nx, cy - ny), inset = Math.min(300, dc);
+    const target = dc > 1e-6 ? { x: nx + ((cx - nx) * inset) / dc, y: ny + ((cy - ny) * inset) / dc } : { x: cx, y: cy };
+    const d = dist(s.pos, target);
+    if (d < MIN_LEG / 2) return null;
+    const k = Math.min(1, MAX_LEG / d);
+    const to = { x: s.pos.x + (target.x - s.pos.x) * k, y: s.pos.y + (target.y - s.pos.y) * k };
+    const len = dist(s.pos, to), th = legThreat(threat, s.pos, to);
+    if (th.max > cfg.maxRisk || len + dist(to, cfg.home) > budget) return null;
+    const leg = { to, len, gain: 0, maxThreat: th.max, meanThreat: th.mean, score: 0 };
+    return { plan: [to], first: leg, total: lvl1.total, rejectedRisk: stats.risk, rejectedEnergy: stats.energy };
+  }
   let bestTotal = -Infinity, bestPlan: Point[] = [], bestFirst = lvl1.legs[0];
   for (const l1 of lvl1.legs.slice(0, BEAM[0])) {
     const cov1 = s.covered.slice();
@@ -302,16 +330,21 @@ function withLog(s: MissionState, msg: string, phase: MissionPhase = s.phase): M
   return { ...s, log: [...s.log, { t: Math.round(s.clockS * 10) / 10, phase, msg }] };
 }
 
-export function initMission(cfg: MissionConfig, prior: Grid | null, threat: Grid | null): MissionState {
-  const covered = new Float32Array(N * N);
+export function initMission(cfg: MissionConfig, prior: Grid | null, threat: Grid | null, carry: Float32Array | null = null): MissionState {
+  const covered = carry && carry.length === N * N ? carry.slice() : new Float32Array(N * N); // mapped ground persists across sorties
   const info = priorInfo(prior, cfg);
   return {
     phase: 'idle', clockS: 0, pos: { ...cfg.home }, headingDeg: 0, flown: [{ ...cfg.home }], plan: [], covered,
     uncertainty: uncertaintyOf(covered, info, cfg), findings: [], operator: null, coverage: 0,
     risk: sample(threat, cfg.home.x, cfg.home.y), battery: 1, legs: 0, phaseS: 0, aborted: false, legStartS: 0, legStartCoverage: 0,
-    log: [{ t: 0, phase: 'idle', msg: 'Simulated autonomous survey on standby. Nothing moves until a named operator arms it.' }],
+    log: [{ t: 0, phase: 'idle', msg: `Simulated autonomous survey on standby, area: ${areaName(cfg)}. Nothing moves until a named operator arms it.` }],
   };
 }
+
+export const areaName = (cfg: MissionConfig) => {
+  const a = cfg.area;
+  return a ? `${km(a.x1 - a.x0)} x ${km(a.y1 - a.y0)} box at ${at10({ x: (a.x0 + a.x1) / 2, y: (a.y0 + a.y1) / 2 })}` : 'whole AO inside the geofence';
+};
 
 export function armMission(s: MissionState, operator: string): MissionState {
   const op = operator.trim();
@@ -369,7 +402,9 @@ export function stepMission(s0: MissionState, dtS: number, cfg: MissionConfig, c
           const f = r.first;
           const share = r.total > 0 ? Math.min(1, f.gain / r.total) : 0;
           const rej = r.rejectedRisk ? ` ${r.rejectedRisk} candidate leg${r.rejectedRisk === 1 ? '' : 's'} rejected over the ${pct(cfg.maxRisk)} risk limit.` : '';
-          s = withLog(s, `Plan leg ${s.legs + 1}: ${km(f.len)} to ${at10(f.to)}, sweeps ~${pct(share)} of remaining survey value, peak threat ${pct(f.maxThreat)}.${rej}`);
+          s = withLog(s, f.gain === 0 && cfg.area
+            ? `Transit leg ${s.legs + 1}: ${km(f.len)} toward the survey area, peak threat ${pct(f.maxThreat)}.`
+            : `Plan leg ${s.legs + 1}: ${km(f.len)} to ${at10(f.to)}, sweeps ~${pct(share)} of remaining survey value, peak threat ${pct(f.maxThreat)}.${rej}`);
           go('flying', `Flying leg ${s.legs + 1} at ${cfg.speedMs} m/s, camera mapping a ${km(cfg.footprintM * 2)} swath.`,
             { plan: r.plan, legStartS: s.clockS, legStartCoverage: s.coverage });
         }
@@ -453,6 +488,63 @@ function look(s: MissionState, ctx: MissionContext, cfg: MissionConfig): Mission
   return out;
 }
 
+// ---- next-survey queue ----
+// A short ranked list of where to survey next (Lattice-style "next action"): candidate boxes around each enemy origin
+// estimate plus a 4 x 4 sector grid, ranked by unmapped high-value ground, discounted by threat and by transit distance.
+export type SurveyOption = {
+  id: string; rank: number; kind: 'origin' | 'sector'; area: Box; center: Point;
+  score: number; unmapped: number; risk: number; maxRisk: number; distM: number; reason: string;
+};
+const SECTOR_COLS = 'ABCD';
+export function surveyQueue(prior: Grid | null, threat: Grid | null, covered: Float32Array, cfg: MissionConfig,
+  origins: { track_id: string; peak: Point; confidence: number }[], limit = 4): SurveyOption[] {
+  const info = priorInfo(prior, { ...cfg, area: null });
+  const g = cfg.geofence;
+  const clampBox = (cx: number, cy: number, half: number): Box => {
+    const x0 = Math.max(g.x0, Math.min(g.x1 - 2 * half, cx - half)), y0 = Math.max(g.y0, Math.min(g.y1 - 2 * half, cy - half));
+    return { x0, y0, x1: Math.min(g.x1, x0 + 2 * half), y1: Math.min(g.y1, y0 + 2 * half) };
+  };
+  const cands: Omit<SurveyOption, 'rank' | 'score' | 'unmapped' | 'risk' | 'maxRisk' | 'distM'>[] = [];
+  for (const o of origins) {
+    if (o.confidence < SITE_MIN_CONF) continue;
+    const area = clampBox(o.peak.x, o.peak.y, 1200);
+    cands.push({ id: `origin-${o.track_id}`, kind: 'origin', area, center: { x: (area.x0 + area.x1) / 2, y: (area.y0 + area.y1) / 2 },
+      reason: `Likely launch area of ${o.track_id} (${pct(o.confidence)} origin estimate)` });
+  }
+  const sw = (g.x1 - g.x0) / 4, sh = (g.y1 - g.y0) / 4;
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const area = { x0: g.x0 + i * sw, y0: g.y0 + j * sh, x1: g.x0 + (i + 1) * sw, y1: g.y0 + (j + 1) * sh };
+    cands.push({ id: `sector-${SECTOR_COLS[i]}${j + 1}`, kind: 'sector', area, center: { x: (area.x0 + area.x1) / 2, y: (area.y0 + area.y1) / 2 },
+      reason: `Sector ${SECTOR_COLS[i]}${j + 1}` });
+  }
+  const scored = cands.map((c) => {
+    let val = 0, left = 0, n = 0, thSum = 0, thMax = 0;
+    for (let r = Math.max(0, Math.floor(c.area.y0 / CELL)); r < Math.min(N, Math.ceil(c.area.y1 / CELL)); r++) {
+      for (let col = Math.max(0, Math.floor(c.area.x0 / CELL)); col < Math.min(N, Math.ceil(c.area.x1 / CELL)); col++) {
+        const i = r * N + col, v = info.norm[i];
+        val += v; left += v * (1 - covered[i]); n++;
+        const th = sample(threat, (col + 0.5) * CELL, (r + 0.5) * CELL);
+        thSum += th; if (th > thMax) thMax = th;
+      }
+    }
+    const risk = n ? thSum / n : 0, distM = dist(cfg.home, c.center);
+    const unmapped = val > 1e-6 ? left / val : 1;
+    const density = n ? left / n : 0;
+    const score = density * (1 - 0.7 * risk) * (1 - 0.25 * Math.min(1, distM / 10000)) * (thMax > cfg.maxRisk ? 0.6 : 1);
+    const reason = c.kind === 'sector' ? `${c.reason}: ${risk > 0.45 ? 'high-value ground under enemy coverage' : 'unmapped high-value ground'}` : c.reason;
+    return { ...c, reason, score, unmapped, risk, maxRisk: thMax, distM, rank: 0 };
+  }).filter((c) => c.score > 0.002 && c.unmapped > 0.15);
+  scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const out: SurveyOption[] = [];
+  for (const c of scored) {
+    if (out.some((o) => dist(o.center, c.center) < 1500)) continue;
+    out.push(c);
+    if (out.length >= limit) break;
+  }
+  const top = out[0]?.score || 1;
+  return out.map((c, i) => ({ ...c, rank: i + 1, score: Math.round((100 * c.score) / top) }));
+}
+
 // For the draped heat in this tab: red = high-value ground not yet mapped, faint blue = unknown, clear = mapped.
 export function uncertaintyGrid(s: MissionState): Grid {
   return s.uncertainty;
@@ -460,7 +552,7 @@ export function uncertaintyGrid(s: MissionState): Grid {
 
 // ---- deck.gl ----
 type RGBA = [number, number, number, number];
-const C = { allied: [90, 169, 255], friendly: [238, 234, 226], hostile: [240, 51, 43], origin: [255, 176, 46], ink: [18, 17, 16] } as const;
+const C = { allied: AFFIL.friend.rgb, friendly: [238, 234, 226], hostile: AFFIL.hostile.rgb, unknown: AFFIL.unknown.rgb, ink: [18, 17, 16] } as const;
 const rgba = (c: readonly number[], a = 255): RGBA => [c[0], c[1], c[2], a];
 const FONT = '"JetBrains Mono", ui-monospace, monospace';
 const PHASE_TAG: Record<MissionPhase, string> = {
@@ -469,18 +561,6 @@ const PHASE_TAG: Record<MissionPhase, string> = {
 };
 export const phaseLabel = (p: MissionPhase) => PHASE_TAG[p];
 
-const SURVEY_ICON = (() => {
-  const c = '#eeeae2', r = '#5aa9ff';
-  const rotors = [[-11, -11], [11, -11], [-11, 11], [11, 11]]
-    .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="7.5" fill="#121110" fill-opacity="0.6" stroke="${r}" stroke-width="1.8"/>
-      <line x1="${x - 6}" y1="${y - 2}" x2="${x + 6}" y2="${y + 2}" stroke="${r}" stroke-width="2.2"/>`).join('');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="-24 -24 48 48">
-    <path d="M-11 -11 L11 11 M11 -11 L-11 11" stroke="#121110" stroke-width="6"/>
-    <path d="M-11 -11 L11 11 M11 -11 L-11 11" stroke="${c}" stroke-width="3"/>${rotors}
-    <rect x="-5" y="-6" width="10" height="12" fill="${c}" stroke="#121110" stroke-width="1.5"/>
-    <path d="M0 -15 L-4.5 -8 L4.5 -8 Z" fill="${c}" stroke="#121110" stroke-width="1"/></svg>`;
-  return { id: 'mission-quad', url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, width: 96, height: 96, anchorX: 48, anchorY: 48 };
-})();
 
 type V3 = [number, number, number];
 type At = (x: number, y: number, up?: number) => V3;
@@ -502,8 +582,14 @@ function ring(x: number, y: number, r: number, at: At, up: number, n = 56): V3[]
 }
 
 // Survey drone, flown path, planned legs, camera footprint, geofence, home and findings. Ids are prefixed 'mission-'.
-// `bearing` (map bearing in degrees) keeps the icon's nose on its heading when the camera is rotated.
-export function missionLayers(s: MissionState, at: At, cfg: MissionConfig, opts: { bearing?: number } = {}): Layer[] {
+// Only enemy findings exist; keep one per launch site and the latest sighting per hostile track.
+export function latestFindings(findings: Finding[]): Finding[] {
+  const latest = new Map<string, Finding>();
+  for (const f of findings) latest.set(`${f.kind}:${f.kind === 'launch_site' ? `${r10(f.x)},${r10(f.y)}` : f.ref}`, f);
+  return [...latest.values()];
+}
+
+export function missionLayers(s: MissionState, at: At, cfg: MissionConfig, _opts: { bearing?: number } = {}): Layer[] {
   const out: Layer[] = [];
   const air = isAirborne(s.phase);
   const alt = air ? cfg.altitudeAglM : 4;
@@ -520,6 +606,12 @@ export function missionLayers(s: MissionState, at: At, cfg: MissionConfig, opts:
   const fence = [{ x: g.x0, y: g.y0 }, { x: g.x1, y: g.y0 }, { x: g.x1, y: g.y1 }, { x: g.x0, y: g.y1 }, { x: g.x0, y: g.y0 }];
   out.push(path('mission-geofence', [densify(fence, at, 25, 250)], rgba(C.allied, 150), 2));
   out.push(text('mission-geofence-label', [{ p: at(g.x0, g.y1, 60), label: 'GEOFENCE', color: rgba(C.allied) }], [0, -14], 'start'));
+  if (cfg.area) {
+    const a = cfg.area;
+    const box = [{ x: a.x0, y: a.y0 }, { x: a.x1, y: a.y0 }, { x: a.x1, y: a.y1 }, { x: a.x0, y: a.y1 }, { x: a.x0, y: a.y0 }];
+    out.push(path('mission-area', [densify(box, at, 30, 120)], rgba(C.unknown, 235), 3));
+    out.push(text('mission-area-label', [{ p: at(a.x0, a.y1, 80), label: 'SURVEY AREA', color: rgba(C.unknown) }], [0, -14], 'start'));
+  }
 
   out.push(new ScatterplotLayer<{ p: V3 }>({
     id: 'mission-home', data: [{ p: at(cfg.home.x, cfg.home.y, 3) }], getPosition: (d) => d.p, getRadius: 120, radiusUnits: 'meters',
@@ -538,23 +630,26 @@ export function missionLayers(s: MissionState, at: At, cfg: MissionConfig, opts:
   }
   if (air) out.push(path('mission-footprint', [ring(s.pos.x, s.pos.y, cfg.footprintM, at, 8)], rgba(C.allied, 210), 2));
 
-  // findings: one marker per site, the latest sighting per hostile track
-  const latest = new Map<string, Finding>();
-  for (const f of s.findings) latest.set(`${f.kind}:${f.kind === 'launch_site' ? `${r10(f.x)},${r10(f.y)}` : f.ref}`, f);
-  const finds = [...latest.values()];
+  // Pinpoints: the survey only ever marks enemy positions (a hostile launch site or a hostile UAS), each as a NATO
+  // hostile symbol on a stalk. One marker per site, the latest sighting per hostile track.
+  const finds = latestFindings(s.findings);
   if (finds.length) {
-    const col = (f: Finding) => (f.kind === 'launch_site' ? rgba(C.origin) : rgba(C.hostile));
+    const col = rgba(C.hostile);
     out.push(new ScatterplotLayer<Finding>({
       id: 'mission-findings', data: finds, getPosition: (f) => at(f.x, f.y, 6), getRadius: (f) => (f.kind === 'launch_site' ? 160 : 90), radiusUnits: 'meters',
-      stroked: true, filled: true, getFillColor: (f) => [...col(f).slice(0, 3), 60] as RGBA, getLineColor: col, lineWidthUnits: 'pixels', getLineWidth: 2, pickable: false,
+      stroked: true, filled: true, getFillColor: [col[0], col[1], col[2], 50], getLineColor: col, lineWidthUnits: 'pixels', getLineWidth: 2, pickable: false,
     }));
     out.push(new LineLayer<Finding>({
       id: 'mission-finding-stalks', data: finds, getSourcePosition: (f) => at(f.x, f.y), getTargetPosition: (f) => at(f.x, f.y, 200),
       getColor: col, widthUnits: 'pixels', getWidth: 1.5, pickable: false,
     }));
+    out.push(new IconLayer<Finding>({
+      id: 'mission-finding-symbols', data: finds, getPosition: (f) => at(f.x, f.y, 200), getIcon: (f) => natoIcon('hostile', f.kind === 'launch_site' ? 'site' : 'uas'),
+      getSize: 34, sizeUnits: 'pixels', billboard: true, pickable: false,
+    }));
     out.push(text('mission-finding-labels', finds.map((f) => ({
-      p: at(f.x, f.y, 220), color: col(f), label: f.kind === 'launch_site' ? 'SITE CONFIRMED' : `HOSTILE SIGHTED ${f.ref}`,
-    }))));
+      p: at(f.x, f.y, 200), color: col, label: f.kind === 'launch_site' ? `HOSTILE LAUNCH SITE · ${pct(f.confidence)}` : `HOSTILE UAS ${f.ref}`,
+    })), [24, 0], 'start'));
   }
 
   const drone = [{ p: at(s.pos.x, s.pos.y, alt), g: at(s.pos.x, s.pos.y) }];
@@ -563,10 +658,16 @@ export function missionLayers(s: MissionState, at: At, cfg: MissionConfig, opts:
       id: 'mission-drop', data: drone, getSourcePosition: (d) => d.p, getTargetPosition: (d) => d.g, getColor: rgba(C.allied, 170), widthUnits: 'pixels', getWidth: 1.5, pickable: false,
     }));
   }
-  const bearing = opts.bearing ?? 0;
+  // Friendly symbol stays upright; a leader line shows the direction of movement.
+  const h = (s.headingDeg * Math.PI) / 180;
+  if (air) {
+    out.push(new LineLayer<{ p: V3 }>({
+      id: 'mission-heading', data: drone, getSourcePosition: (d) => d.p, getTargetPosition: () => at(s.pos.x + 420 * Math.sin(h), s.pos.y + 420 * Math.cos(h), alt),
+      getColor: rgba(C.allied, 230), widthUnits: 'pixels', getWidth: 2.5, pickable: false,
+    }));
+  }
   out.push(new IconLayer<{ p: V3 }>({
-    id: 'mission-drone', data: drone, getPosition: (d) => d.p, getIcon: () => SURVEY_ICON, getSize: 52, sizeUnits: 'pixels', billboard: true,
-    getAngle: () => bearing - s.headingDeg, updateTriggers: { getAngle: [bearing, s.headingDeg] }, pickable: false,
+    id: 'mission-drone', data: drone, getPosition: (d) => d.p, getIcon: () => natoIcon('friend', 'uas'), getSize: 46, sizeUnits: 'pixels', billboard: true, pickable: false,
   }));
   out.push(text('mission-drone-label', [{ p: drone[0].p, color: rgba(C.allied), label: `SURVEY-1 · ${PHASE_TAG[s.phase]} · BAT ${pct(s.battery)}` }], [36, 0], 'start'));
   return out;

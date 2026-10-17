@@ -1,0 +1,23 @@
+/* Track evidence: confidence climbing with fixes (enemy tab track card and track list). */
+.ev { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--line); background: var(--panel-2); font-family: var(--mono); }
+.ev-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.ev-aff { display: inline-flex; align-items: center; gap: 6px; }
+.ev-aff i { display: inline-flex; width: 16px; height: 16px; }
+.ev-now b { font-weight: 800; }
+.ev-origin { color: var(--origin); }
+.ev-chart { width: 100%; height: 70px; display: block; border-bottom: 1px solid var(--line); }
+.ev-thresh { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.ev-tlabel { font: 700 9px var(--mono); fill: var(--faint); letter-spacing: 0.06em; }
+.ev-hostile { fill: #ff3b30; }
+.ev-id { fill: none; stroke-width: 2.4; }
+.ev-orig { fill: none; stroke: var(--origin); stroke-width: 1.6; stroke-dasharray: 4 2; }
+.ev-cross { stroke: #ff3b30; stroke-width: 1; }
+.ev-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ev-updates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ev-updates li { display: grid; grid-template-columns: 64px 44px 1fr; color: var(--muted); }
+.ev-updates time { color: var(--faint); }
+.ev-updates b { color: var(--origin); }
+.ev-cap { margin: 0; font-size: 11px; line-height: 1.35; color: var(--faint); }
+
+.ev-meter { display: inline-grid; grid-template-columns: repeat(5, 1fr); gap: 2px; width: 44px; height: 8px; flex: none; }
+.ev-meter i { background: var(--line-2); }

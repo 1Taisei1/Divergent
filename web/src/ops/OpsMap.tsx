@@ -24,9 +24,12 @@ import { addHeatLayers, setHeat } from './heatTiles';
 import { planRoutes } from './route';
 import AutonomyPanel from './AutonomyPanel';
 import {
-  abortMission, armMission, DEFAULT_MISSION, initMission, isActive, missionLayers, stepMission, uncertaintyGrid,
-  type MissionContext, type MissionState,
+  abortMission, areaName, armMission, DEFAULT_MISSION, initMission, isActive, latestFindings, missionLayers, stepMission, surveyQueue,
+  uncertaintyGrid, type Box, type MissionContext, type MissionState, type SurveyOption,
 } from './autonomy';
+import { fuseLaunch, fuseOrigin, mappedShare, surveyNote, type SurveyEvidence } from './fusion';
+import { AFFIL, affiliationOf, natoIcon, natoSvg, trackConfidence, type Affiliation } from './symbols';
+import { ConfMeter, EvidenceTrend } from './TrackEvidence';
 import ProvenanceView from './Provenance';
 
 export type OpsMode = 'enemy' | 'launch' | 'route' | 'survey' | 'provenance';
@@ -41,8 +44,9 @@ const MODES: { id: OpsMode; code: string; label: string; palette: Palette; red: 
 
 type RGBA = [number, number, number, number];
 const RGB = {
-  hostile: [240, 51, 43], lost: [143, 138, 132], friendly: [238, 234, 226], allied: [90, 169, 255], enemy: [240, 51, 43],
-  origin: [255, 176, 46], safe: [63, 214, 138], det: [127, 240, 255], clutter: [150, 150, 150], ink: [18, 17, 16],
+  hostile: AFFIL.hostile.rgb, lost: [143, 138, 132], friendly: [238, 234, 226], allied: AFFIL.friend.rgb, enemy: AFFIL.hostile.rgb,
+  origin: [255, 176, 46], safe: [63, 214, 138], unknown: AFFIL.unknown.rgb,
+  det: AFFIL.unknown.rgb, clutter: AFFIL.neutral.rgb, ink: [18, 17, 16], // raw contacts are UNKNOWN, rejected clutter NEUTRAL
 } as const;
 const rgba = (c: readonly number[], a = 255): RGBA => [c[0], c[1], c[2], a];
 const FONT = '"JetBrains Mono", ui-monospace, monospace';
@@ -52,21 +56,12 @@ const SENSOR_CODE = { radar: 'RAD', acoustic: 'ACO', rf: 'RF' } as const;
 const CRUISE_AGL = 140, CLIMB_MS = 9, START_AGL = 20, SURVEY_AGL = 110;
 const agl = (t: number, t0: number) => Math.min(CRUISE_AGL, START_AGL + CLIMB_MS * Math.max(0, t - t0));
 
-type Kind = 'hostile' | 'lost' | 'friendly';
-function quadIcon(kind: Kind) {
-  const c = kind === 'hostile' ? '#f0332b' : kind === 'lost' ? '#8f8a84' : '#eeeae2';
-  const r = kind === 'friendly' ? '#5aa9ff' : c;
-  const rotors = [[-11, -11], [11, -11], [-11, 11], [11, 11]]
-    .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="7.5" fill="#121110" fill-opacity="0.6" stroke="${r}" stroke-width="1.8"/>
-      <line x1="${x - 6}" y1="${y - 2}" x2="${x + 6}" y2="${y + 2}" stroke="${r}" stroke-width="2.2"/>`).join('');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="-24 -24 48 48">
-    <path d="M-11 -11 L11 11 M11 -11 L-11 11" stroke="#121110" stroke-width="6"/>
-    <path d="M-11 -11 L11 11 M11 -11 L-11 11" stroke="${c}" stroke-width="3"/>${rotors}
-    <rect x="-5" y="-6" width="10" height="12" fill="${c}" stroke="#121110" stroke-width="1.5"/>
-    <path d="M0 -15 L-4.5 -8 L4.5 -8 Z" fill="${c}" stroke="#121110" stroke-width="1"/></svg>`;
-  return { id: `quad-${kind}`, url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, width: 96, height: 96, anchorX: 48, anchorY: 48 };
-}
-const ICONS = { hostile: quadIcon('hostile'), lost: quadIcon('lost'), friendly: quadIcon('friendly') };
+// NATO affiliation frames (symbols.ts): a track is UNKNOWN until the evidence makes it HOSTILE; lost tracks keep the
+// hostile frame, faded. Symbols stay upright; a leader line shows the direction of movement.
+type Kind = 'hostile' | 'lost' | 'friendly' | 'unknown';
+const ICONS = { hostile: natoIcon('hostile'), lost: natoIcon('hostile'), friendly: natoIcon('friend'), unknown: natoIcon('unknown') };
+const kindRGB = (k: Kind) => (k === 'lost' ? RGB.lost : k === 'unknown' ? RGB.unknown : k === 'friendly' ? RGB.allied : RGB.hostile);
+const NATO_KEY: Affiliation[] = ['friend', 'hostile', 'neutral', 'unknown'];
 
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 const fc = (features: GeoJSON.Feature[]): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features });
@@ -93,13 +88,22 @@ const framePadding = (map: MLMap) => {
 };
 
 // x/y/alt at this second, px/py/palt at the previous one (the animation loop glides between them).
-type Drone = { id: string; kind: Kind; x: number; y: number; px: number; py: number; hdg: number; spd: number; alt: number; palt: number; track: Track };
+type Drone = { id: string; kind: Kind; x: number; y: number; px: number; py: number; hdg: number; spd: number; alt: number; palt: number; track: Track; conf: number; fixes: number };
 const DET_WINDOW_S = 30;
 const HEAT_STEP_S = 2;
 // Autonomous survey clock: 10 ticks per real second; decision phases run at 2x so MAP / PLAN / UPDATE stay readable,
 // transit runs at 10x so a whole sortie fits in a couple of minutes of demo.
 const MISSION_TICK_S = 0.1, MISSION_RATE_DECIDE = 2, MISSION_RATE_FLY = 10;
 const noop = () => undefined;
+// A drawn survey area is at least this wide, and always inside the geofence.
+const MIN_AREA_M = 800;
+function boxFrom(a: Point, b: Point): Box {
+  const g = DEFAULT_MISSION.geofence;
+  let x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  if (x1 - x0 < MIN_AREA_M) { const c = (x0 + x1) / 2; x0 = c - MIN_AREA_M / 2; x1 = c + MIN_AREA_M / 2; }
+  if (y1 - y0 < MIN_AREA_M) { const c = (y0 + y1) / 2; y0 = c - MIN_AREA_M / 2; y1 = c + MIN_AREA_M / 2; }
+  return { x0: Math.max(g.x0, x0), y0: Math.max(g.y0, y0), x1: Math.min(g.x1, x1), y1: Math.min(g.y1, y1) };
+}
 
 // Resample a polyline every stepM metres so 3D paths follow the terrain instead of cutting through ridges.
 function densify(pts: Point[], stepM = 150): Point[] {
@@ -139,6 +143,23 @@ export default function OpsMap(p: Props) {
   const [activeRoute, setActiveRoute] = useState(0);
   const [cardOpen, setCardOpen] = useState(() => window.innerWidth >= 700);
   const [mission, setMission] = useState<MissionState>(() => initMission(DEFAULT_MISSION, null, null));
+  const [surveyArea, setSurveyArea] = useState<Box | null>(null); // null = whole AO
+  const [areaPick, setAreaPick] = useState<{ on: boolean; corner: Point | null }>({ on: false, corner: null });
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const missionCfg = useMemo(() => ({ ...DEFAULT_MISSION, area: surveyArea }), [surveyArea]);
+  const missionCfgRef = useRef(missionCfg);
+  missionCfgRef.current = missionCfg;
+  // Choosing an area (whole AO, a drawn box, or a queue suggestion) re-plans an idle survey; ground already mapped
+  // by earlier sorties is carried over. Locked while a sortie is armed or airborne.
+  const chooseArea = (box: Box | null, id: string | null = null) => {
+    setSurveyArea(box); setPickedId(id); setAreaPick({ on: false, corner: null });
+    setMission((m) => (isActive(m.phase) ? m : initMission({ ...DEFAULT_MISSION, area: box }, null, null, m.covered)));
+  };
+  const surveyClick = (pt: Point) => {
+    if (!areaPick.on) return;
+    if (!areaPick.corner) { setAreaPick({ on: true, corner: pt }); return; }
+    chooseArea(boxFrom(areaPick.corner, pt));
+  };
   const camOut = useRef<HTMLOutputElement>(null);
   const card = useRef<HTMLElement>(null);
   const sent = useRef(new Map<string, string>()); // last GeoJSON sent per source
@@ -150,8 +171,8 @@ export default function OpsMap(p: Props) {
   const prev = t > 0 ? frameAt(s, t - 1) : undefined;
 
   // Latest values for map event handlers registered once.
-  const live = useRef({ mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s });
-  live.current = { mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s };
+  const live = useRef({ mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s, surveyClick });
+  live.current = { mode, pickStart, elev, onSelect: p.onSelectTrack, scenario: s, surveyClick };
 
   // ---- map + overlay, created once ----
   useEffect(() => {
@@ -258,6 +279,8 @@ export default function OpsMap(p: Props) {
         setActiveRoute(0);
       } else if (L.mode === 'enemy') {
         L.onSelect(null);
+      } else if (L.mode === 'survey') {
+        L.surveyClick(clampToBox(fromLngLat(e.lngLat.lng, e.lngLat.lat)));
       }
     });
 
@@ -287,12 +310,21 @@ export default function OpsMap(p: Props) {
   const activity = useMemo(() => (needs.activity ? hostileActivityField(s, heatT) : null), [s, heatT, needs.activity]);
   const originField = useMemo(() => (needs.origin ? enemyOriginField(s, heatT, alliedDetect) : null), [s, heatT, alliedDetect, needs.origin]);
   const launchField = useMemo(() => (mode === 'launch' && activity ? safeLaunchField(s, heatT, enemyDetect, activity, terrain) : null), [mode, s, heatT, enemyDetect, activity, terrain]);
+  // What the survey has mapped and found feeds back into tabs 01-03 (fusion.ts). Keyed on the mission's value-map
+  // refresh so the other pictures update a few times a second during a sortie, not on every tick.
+  const evidence: SurveyEvidence = useMemo(() => ({ covered: mission.covered, findings: mission.findings, key: mission.uncertainty }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- covered is read when the value map refreshes
+    [mission.uncertainty, mission.findings]);
+  const fusedOrigin = useMemo(() => fuseOrigin(originField, evidence), [originField, evidence]);
+  const fusedLaunch = useMemo(() => fuseLaunch(launchField, evidence), [launchField, evidence]);
+  const fusionNote = useMemo(() => surveyNote(evidence, mappedShare(evidence.covered)), [evidence]);
+  const surveySites = useMemo(() => latestFindings(mission.findings).filter((f) => f.kind === 'launch_site'), [mission.findings]);
   const wantThreat = mode === 'route' || surveyLive;
-  const threat: Grid | null = useMemo(() => (wantThreat && activity && originField ? routeThreatField(enemyDetect, activity, originField) : null), [wantThreat, enemyDetect, activity, originField]);
+  const threat: Grid | null = useMemo(() => (wantThreat && activity && fusedOrigin ? routeThreatField(enemyDetect, activity, fusedOrigin) : null), [wantThreat, enemyDetect, activity, fusedOrigin]);
 
   // ---- autonomous survey (tab 04) ----
   // Before arming, preview the value map from the live intel; once armed the mission owns its own state and clock.
-  const idlePreview = useMemo(() => (mode === 'survey' && mission.phase === 'idle' ? initMission(DEFAULT_MISSION, originField, threat) : null), [mode, mission.phase, originField, threat]);
+  const idlePreview = useMemo(() => (mode === 'survey' && mission.phase === 'idle' ? initMission(missionCfg, originField, threat, mission.covered) : null), [mode, mission.phase, mission.covered, missionCfg, originField, threat]);
   const shownMission = idlePreview ?? mission;
   const missionCtx = useRef<MissionContext>({ prior: null, threat: null, origins: [], tracks: [] });
   missionCtx.current = { prior: originField, threat, origins: frame?.origins ?? [], tracks: frame?.tracks ?? [] };
@@ -300,12 +332,15 @@ export default function OpsMap(p: Props) {
     if (!missionOn) return;
     const id = window.setInterval(() => setMission((m) => {
       const rate = m.phase === 'flying' || m.phase === 'returning' ? MISSION_RATE_FLY : MISSION_RATE_DECIDE;
-      return stepMission(m, rate * MISSION_TICK_S, DEFAULT_MISSION, missionCtx.current);
+      return stepMission(m, rate * MISSION_TICK_S, missionCfgRef.current, missionCtx.current);
     }), MISSION_TICK_S * 1000);
     return () => window.clearInterval(id);
   }, [missionOn]);
   useEffect(() => { if (card.current) card.current.scrollTop = 0; }, [mission.phase]);
-  const armSurvey = (operator: string) => setMission(armMission(initMission(DEFAULT_MISSION, originField, threat), operator));
+  const armSurvey = (operator: string) => setMission(armMission(initMission(missionCfg, originField, threat, mission.covered), operator));
+  // Ranked next-survey suggestions (Lattice-style next action) from the live origin estimate, threat and mapped ground.
+  const queue: SurveyOption[] = useMemo(() => (mode === 'survey' && frame ? surveyQueue(originField, threat, evidence.covered, DEFAULT_MISSION, frame.origins) : []), [mode, frame, originField, threat, evidence]);
+  useEffect(() => { const c = mapRef.current?.getCanvas(); if (c) c.style.cursor = areaPick.on ? 'crosshair' : ''; }, [areaPick.on]);
   const routes = useMemo(() => (goal && threat ? planRoutes(threat, start, goal) : []), [threat, start, goal]);
   // Only the last DET_WINDOW_S seconds of detections: enough to show the fragments, bounded cost on the GPU.
   const dets = useMemo(() => s.frames.slice(Math.max(0, t - DET_WINDOW_S), t + 1).flatMap((f) => f.detections), [s, t]);
@@ -324,8 +359,11 @@ export default function OpsMap(p: Props) {
       const pv = before.get(tr.id);
       const t0 = tr.points[0]?.t ?? t;
       const tNow = lost ? (tr.points[tr.points.length - 1]?.t ?? t) : t;
+      const fixes = tr.points.filter((q) => q.t <= t).length || tr.points.length;
+      const conf = trackConfidence(fixes, tr.sensor_ids.length);
+      const kind: Kind = lost ? 'lost' : affiliationOf(conf) === 'hostile' ? 'hostile' : 'unknown';
       return {
-        id: tr.id, kind: lost ? 'lost' : 'hostile', x: tr.current.x, y: tr.current.y, px: !lost && pv ? pv.x : tr.current.x, py: !lost && pv ? pv.y : tr.current.y,
+        id: tr.id, kind, conf, fixes, x: tr.current.x, y: tr.current.y, px: !lost && pv ? pv.x : tr.current.x, py: !lost && pv ? pv.y : tr.current.y,
         hdg: headingDeg(tr.current.vx, tr.current.vy), spd: speedMs(tr.current.vx, tr.current.vy), alt: agl(tNow, t0), palt: lost ? agl(tNow, t0) : agl(t - 1, t0), track: tr,
       };
     });
@@ -336,8 +374,8 @@ export default function OpsMap(p: Props) {
     const map = mapRef.current;
     if (!ready || !map || !frame) return;
     let heat: HeatFrame | null = null;
-    if (mode === 'enemy' && originField) heat = heatFrame(lift(originField, 0.55), 'threat'); // show the back-projected cones, not just the peaks
-    if (mode === 'launch' && launchField) heat = heatFrame(lift(launchField, 0.5), 'safe'); // rank the whole box, not only the top sites
+    if (mode === 'enemy' && fusedOrigin) heat = heatFrame(lift(fusedOrigin, 0.55), 'threat'); // show the back-projected cones, not just the peaks
+    if (mode === 'launch' && fusedLaunch) heat = heatFrame(lift(fusedLaunch, 0.5), 'safe'); // rank the whole box, not only the top sites
     if (mode === 'route' && threat) heat = heatFrame(threat, 'threat');
     if (mode === 'survey') heat = heatFrame(uncertaintyGrid(shownMission), 'unknown');
     setHeat(map, heat?.canvas ?? null, heat?.key ?? '', mode === 'enemy' ? 0.92 : 0.72); // wide-area tabs stay see-through
@@ -357,7 +395,7 @@ export default function OpsMap(p: Props) {
     set('routes', mode === 'route' ? [...routeLines.filter((f) => !f.properties?.active), ...routeLines.filter((f) => f.properties?.active)] : []);
     const rr = p.reconRoute;
     set('recon', rr && (mode === 'enemy' || mode === 'route') ? [line(rr.waypoints.map((q) => toLngLat(q.x, q.y))), ...(frame.recon ? [poly([circleRing(frame.recon.x, frame.recon.y, 1000, 48)])] : [])] : []);
-  }, [ready, frame, mode, s, originField, launchField, threat, routes, activeRoute, p.reconRoute, shownMission]);
+  }, [ready, frame, mode, s, fusedOrigin, fusedLaunch, threat, routes, activeRoute, p.reconRoute, shownMission]);
 
   // ---- deck.gl: 3D objects ----
   const layers = useMemo(() => {
@@ -393,7 +431,7 @@ export default function OpsMap(p: Props) {
       out.push(new PathLayer<Drone>({
         id: 'flight-paths', data: drones, widthUnits: 'pixels', billboard: true, capRounded: true, jointRounded: true,
         getPath: (d) => [...d.track.points.map((q) => at(q.x, q.y, agl(q.t, d.track.points[0].t))), at(d.x, d.y, d.alt)],
-        getWidth: (d) => (d.id === sel ? 5 : 3), getColor: (d) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, dim(d.id)),
+        getWidth: (d) => (d.id === sel ? 5 : 3), getColor: (d) => rgba(kindRGB(d.kind), dim(d.id)),
         updateTriggers: { getPath: elev, getColor: sel, getWidth: sel },
       }));
       out.push(new LineLayer({
@@ -409,20 +447,28 @@ export default function OpsMap(p: Props) {
       out.push(text('site-labels-enemy', sites, {
         getPosition: (q: Point) => at(q.x, q.y, 300), getText: (q: { label: string }) => q.label, getColor: rgba(RGB.origin), updateTriggers: { getPosition: elev },
       }));
-      // Survey-confirmed launch sites (recon fusion): a white stalk and a tight ring at the confirmed position.
-      const confirmed = frame.confirmed_sites ?? [];
+      // Confirmed enemy launch sites, from recon fusion and from this session's autonomous survey: NATO hostile site
+      // symbols on a stalk with a tight ring at the confirmed position.
+      const confirmed = [
+        ...(frame.confirmed_sites ?? []).map((c) => ({ x: c.x, y: c.y, radius_m: c.radius_m, label: `${c.team_id} HOSTILE SITE CONFIRMED ±${Math.round(c.radius_m)}M` })),
+        ...surveySites.map((f) => ({ x: f.x, y: f.y, radius_m: 150, label: `HOSTILE SITE · SURVEY-1 ${pct(f.confidence)}` })),
+      ];
       out.push(new LineLayer({
-        id: 'confirmed-stalks', data: confirmed, widthUnits: 'pixels', getWidth: 3, getColor: rgba(RGB.friendly),
+        id: 'confirmed-stalks', data: confirmed, widthUnits: 'pixels', getWidth: 3, getColor: rgba(RGB.hostile),
         getSourcePosition: (c: Point) => at(c.x, c.y), getTargetPosition: (c: Point) => at(c.x, c.y, 420), updateTriggers: { getSourcePosition: elev, getTargetPosition: elev },
       }));
       out.push(new ScatterplotLayer({
         id: 'confirmed-rings', data: confirmed, radiusUnits: 'meters', getRadius: (c: { radius_m: number }) => Math.max(60, c.radius_m),
-        stroked: true, filled: false, lineWidthUnits: 'pixels', getLineWidth: 2.5, getLineColor: rgba(RGB.friendly),
+        stroked: true, filled: false, lineWidthUnits: 'pixels', getLineWidth: 2.5, getLineColor: rgba(RGB.hostile),
         getPosition: (c: Point) => at(c.x, c.y, 10), updateTriggers: { getPosition: elev },
       }));
+      out.push(new IconLayer({
+        id: 'confirmed-symbols', data: confirmed, billboard: true, sizeUnits: 'pixels', getSize: 34, getIcon: () => natoIcon('hostile', 'site'),
+        getPosition: (c: Point) => at(c.x, c.y, 420), updateTriggers: { getPosition: elev },
+      }));
       out.push(text('confirmed-labels', confirmed, {
-        getPosition: (c: Point) => at(c.x, c.y, 470), getColor: rgba(RGB.friendly),
-        getText: (c: { team_id: string; radius_m: number }) => `${c.team_id} SITE CONFIRMED ±${Math.round(c.radius_m)}M`, updateTriggers: { getPosition: elev },
+        getPosition: (c: Point) => at(c.x, c.y, 420), getColor: rgba(RGB.hostile), getPixelOffset: [0, -30],
+        getText: (c: { label: string }) => c.label, updateTriggers: { getPosition: elev },
       }));
       const selO = frame.origins.filter((o) => o.track_id === sel);
       out.push(text('origin-labels', selO, {
@@ -472,15 +518,14 @@ export default function OpsMap(p: Props) {
       }));
     }
     return out;
-  }, [frame, s, elev, mode, drones, dets, firstSeen, p.selectedTrack, p.reconRoute, start, goal, routes, activeRoute]);
+  }, [frame, s, elev, mode, drones, dets, firstSeen, p.selectedTrack, p.reconRoute, start, goal, routes, activeRoute, surveySites]);
 
   // Per-frame layers: things that glide between simulated seconds or turn with the camera. Built inside the animation
   // loop below (no React re-render per frame); k is 0..1 through the current simulated second.
-  const dynamic = useRef<(k: number, bearing: number, pitch: number) => Layer[]>(() => []);
-  dynamic.current = (k, brg, pit) => {
-    // On-screen icon angle: heading relative to the camera, foreshortened by the tilt so the nose follows the path.
-    const screen = (hdg: number) => { const a = ((hdg - brg) * Math.PI) / 180; return -(Math.atan2(Math.sin(a), Math.cos(a) * Math.cos((pit * Math.PI) / 180)) * 180) / Math.PI; };
+  const dynamic = useRef<(k: number) => Layer[]>(() => []);
+  dynamic.current = (k) => {
     if (!frame) return [];
+    const lead = (x: number, y: number, hdg: number, alt: number, m = 320) => { const h = (hdg * Math.PI) / 180; return atTerrain(x + m * Math.sin(h), y + m * Math.cos(h), alt); };
     const at = atTerrain;
     const sel = frame.tracks.some((x) => x.id === p.selectedTrack) ? p.selectedTrack : null;
     const out: Layer[] = [];
@@ -499,19 +544,25 @@ export default function OpsMap(p: Props) {
       }));
       out.push(new ScatterplotLayer<Drone>({
         id: 'ground-marks', data: g, radiusUnits: 'meters', getRadius: 40, stroked: true, filled: true, lineWidthUnits: 'pixels', getLineWidth: 1.5,
-        getPosition: (d) => at(d.x, d.y, 6), getFillColor: [0, 0, 0, 110], getLineColor: (d) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, 160),
+        getPosition: (d) => at(d.x, d.y, 6), getFillColor: [0, 0, 0, 110], getLineColor: (d) => rgba(kindRGB(d.kind), 160),
         updateTriggers: { getPosition: [elev, k] },
+      }));
+      out.push(new LineLayer<Drone>({
+        id: 'drone-heading', data: g.filter((d) => d.kind !== 'lost'), widthUnits: 'pixels', getWidth: 2.5,
+        getSourcePosition: (d) => at(d.x, d.y, d.alt), getTargetPosition: (d) => lead(d.x, d.y, d.hdg, d.alt),
+        getColor: (d) => rgba(kindRGB(d.kind), dim(d.id) ? 60 : 230),
+        updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k], getColor: sel },
       }));
       out.push(new IconLayer<Drone>({
         id: 'drones', data: g, pickable: true, billboard: true, sizeUnits: 'pixels',
-        getIcon: (d) => ICONS[d.kind], getSize: (d) => (d.id === sel ? 60 : 46), getPosition: (d) => at(d.x, d.y, d.alt),
-        getAngle: (d) => (d.kind === 'lost' ? 0 : screen(d.hdg)), getColor: (d) => [255, 255, 255, dim(d.id) ? 90 : 255],
-        updateTriggers: { getPosition: [elev, k], getAngle: [brg, pit], getSize: sel, getColor: sel },
+        getIcon: (d) => ICONS[d.kind], getSize: (d) => (d.id === sel ? 50 : 38), getPosition: (d) => at(d.x, d.y, d.alt),
+        getColor: (d) => [255, 255, 255, d.kind === 'lost' ? 110 : dim(d.id) ? 90 : 255],
+        updateTriggers: { getPosition: [elev, k], getSize: sel, getColor: sel },
       }));
       out.push(label('drone-labels', g, {
         getPosition: (d: Drone) => at(d.x, d.y, d.alt),
-        getText: (d: Drone) => (d.kind === 'lost' ? `${d.id} LOST` : d.id === sel ? `${d.id} ${Math.round(d.spd)}M/S ${Math.round(d.alt)}M` : d.id),
-        getColor: (d: Drone) => rgba(d.kind === 'lost' ? RGB.lost : RGB.hostile, dim(d.id) ? 90 : 255),
+        getText: (d: Drone) => (d.kind === 'lost' ? `${d.id} LOST` : d.id === sel ? `${d.id} ${pct(d.conf)} · ${Math.round(d.spd)}M/S ${Math.round(d.alt)}M` : `${d.id} ${pct(d.conf)}`),
+        getColor: (d: Drone) => rgba(kindRGB(d.kind), dim(d.id) ? 90 : 255),
         updateTriggers: { getPosition: [elev, k], getColor: sel, getText: sel },
       }));
     }
@@ -524,9 +575,14 @@ export default function OpsMap(p: Props) {
         id: 'survey-drop', data: d, widthUnits: 'pixels', getWidth: 1.5, getColor: rgba(RGB.allied, 170),
         getSourcePosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getTargetPosition: (q: Point) => at(q.x, q.y), updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k] },
       }));
+      out.push(new LineLayer({
+        id: 'survey-heading', data: d, widthUnits: 'pixels', getWidth: 2.5, getColor: rgba(RGB.allied, 230),
+        getSourcePosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getTargetPosition: (q: { x: number; y: number; hdg: number }) => lead(q.x, q.y, q.hdg, SURVEY_AGL),
+        updateTriggers: { getSourcePosition: [elev, k], getTargetPosition: [elev, k] },
+      }));
       out.push(new IconLayer({
-        id: 'survey-drone', data: d, billboard: true, sizeUnits: 'pixels', getIcon: () => ICONS.friendly, getSize: 52,
-        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getAngle: (q: { hdg: number }) => screen(q.hdg), updateTriggers: { getPosition: [elev, k], getAngle: [brg, pit] },
+        id: 'survey-drone', data: d, billboard: true, sizeUnits: 'pixels', getIcon: () => ICONS.friendly, getSize: 44,
+        getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), updateTriggers: { getPosition: [elev, k] },
       }));
       out.push(label('survey-label', d, {
         getPosition: (q: Point) => at(q.x, q.y, SURVEY_AGL), getPixelOffset: [36, 0], getColor: rgba(RGB.allied),
@@ -537,7 +593,17 @@ export default function OpsMap(p: Props) {
   };
 
   // One animation loop (~30 fps) composes coverage sweeps + slow layers + per-frame layers straight into deck.gl.
-  const missionLs = useMemo(() => (mode === 'survey' ? missionLayers(shownMission, atTerrain, DEFAULT_MISSION, { bearing }) : []), [mode, shownMission, atTerrain, bearing]);
+  const missionLs = useMemo(() => {
+    if (mode !== 'survey') return [];
+    const ls = missionLayers(shownMission, atTerrain, missionCfg);
+    if (areaPick.corner) {
+      ls.push(new ScatterplotLayer<Point>({
+        id: 'area-corner', data: [areaPick.corner], getPosition: (q) => atTerrain(q.x, q.y, 6), getRadius: 90, radiusUnits: 'meters',
+        stroked: true, filled: true, getFillColor: rgba(RGB.unknown, 90), getLineColor: rgba(RGB.unknown), lineWidthUnits: 'pixels', getLineWidth: 2,
+      }));
+    }
+    return ls;
+  }, [mode, shownMission, atTerrain, missionCfg, areaPick.corner]);
   const slow = useRef<Layer[]>([]);
   slow.current = missionLs.length ? [...layers, ...missionLs] : layers;
   const hidden = mode === 'provenance'; // the lineage view covers the map: stop drawing under it
@@ -551,7 +617,7 @@ export default function OpsMap(p: Props) {
     const still = reduceMotion();
     const k = a.playing && !still ? Math.min(1, (now - tChangedAt.current) / STEP_MS) : 1;
     overlay.setProps({
-      layers: [...coverageLayers(a.sensors, a.at, { focus: a.focus, timeMs: still ? 0 : now }), ...slow.current, ...dynamic.current(k, map.getBearing(), map.getPitch())],
+      layers: [...coverageLayers(a.sensors, a.at, { focus: a.focus, timeMs: still ? 0 : now }), ...slow.current, ...dynamic.current(k)],
     });
   }, []);
   useEffect(() => { push(performance.now()); }); // after every React render (new second, tab, selection)
@@ -622,10 +688,10 @@ export default function OpsMap(p: Props) {
         {mode === 'enemy' && (selTrack && selDrone ? (
           <>
             <div className="ops-card-head">
-              <span className="micro">Track · hostile air</span>
+              <span className="micro">Track · {selDrone.kind === 'unknown' ? 'unknown air' : 'hostile air'}</span>
               <button className="ops-x" onClick={() => p.onSelectTrack(null)} aria-label="Close track card">✕</button>
             </div>
-            <h2 className="ops-title hostile">{selTrack.id}<small>{selTrack.status === 'lost' ? 'LOST' : 'ACTIVE'}</small></h2>
+            <h2 className={`ops-title ${selDrone.kind === 'unknown' ? 'unknown' : 'hostile'}`}>{selTrack.id}<small>{selTrack.status === 'lost' ? 'LOST' : selDrone.kind === 'unknown' ? 'UNKNOWN' : 'HOSTILE'}</small></h2>
             <dl className="ops-data">
               <div><dt>Speed</dt><dd>{Math.round(selDrone.spd)} m/s</dd></div>
               <div><dt>Heading</dt><dd>{pad3(selDrone.hdg)}°</dd></div>
@@ -634,6 +700,7 @@ export default function OpsMap(p: Props) {
               <div><dt>Sensors</dt><dd>{selTrack.sensor_ids.join(' ') || '–'}</dd></div>
               <div><dt>Team</dt><dd>{selTeam?.id ?? '–'}</dd></div>
             </dl>
+            <EvidenceTrend scenario={s} trackId={selTrack.id} t={t} />
             {selOrigin && (
               <p className="ops-note">Launch origin near ({Math.round(selOrigin.peak.x / 10) * 10}, {Math.round(selOrigin.peak.y / 10) * 10}) m · {pct(selOrigin.confidence)} confidence · ±{Math.round(selOrigin.radius_m)} m</p>
             )}
@@ -641,17 +708,18 @@ export default function OpsMap(p: Props) {
           </>
         ) : (
           <>
-            <span className="micro">Hostile tracks · T+{pad3(t)}</span>
+            <span className="micro">Air contacts · T+{pad3(t)}</span>
             {drones.length === 0 && <p className="ops-note">{p.playing ? 'Waiting for the first fused track.' : 'No tracks yet. Press play.'}</p>}
             <ul className="ops-list">
               {drones.map((d) => (
                 <li key={d.id}><button onClick={() => { p.onSelectTrack(d.id); }}>
-                  <b className={d.kind === 'lost' ? 'lost' : 'hostile'}>{d.id}</b>
-                  <span>{d.kind === 'lost' ? 'LOST' : `${Math.round(d.spd)} M/S · ${pad3(d.hdg)}°`}</span>
+                  <b className={d.kind}>{d.id}</b>
+                  <span>{d.kind === 'lost' ? 'LOST' : `${d.kind === 'unknown' ? 'UNK' : 'HOS'} ${pct(d.conf)} · ${d.fixes} FIX`}</span>
+                  <ConfMeter value={d.kind === 'lost' ? 0 : d.conf} />
                 </button></li>
               ))}
             </ul>
-            <p className="ops-note">Click a drone for its track card. Right-drag or use the controls to tilt and rotate.</p>
+            <p className="ops-note">Contacts start UNKNOWN and turn HOSTILE as fixes and sensors add evidence. Click one for its evidence card.</p>
           </>
         ))}
 
@@ -663,7 +731,7 @@ export default function OpsMap(p: Props) {
               {s.launch_site_options.map((o, i) => (
                 <li key={i}><button onClick={() => flyTo(o)}>
                   <b className="safe">SITE {i + 1}</b>
-                  <span>{pct(o.concealment)} concealed{o.distance_to_coverage_m != null ? ` · ${km(o.distance_to_coverage_m)} from coverage` : ''}</span>
+                  <span><em className="ok">{pct(o.concealment)}</em> concealed{o.distance_to_coverage_m != null ? ` · ${km(o.distance_to_coverage_m)} from coverage` : ''}</span>
                 </button></li>
               ))}
             </ul>
@@ -673,7 +741,11 @@ export default function OpsMap(p: Props) {
 
         {mode === 'survey' && (
           <AutonomyPanel state={shownMission} playing={p.playing} maxRisk={DEFAULT_MISSION.maxRisk}
-            onArm={armSurvey} onAbort={() => setMission(abortMission)} onReset={() => setMission(initMission(DEFAULT_MISSION, null, null))} />
+            onArm={armSurvey} onAbort={() => setMission(abortMission)} onReset={() => setMission((m) => initMission(missionCfg, null, null, m.covered))}
+            areaLabel={surveyArea ? areaName(missionCfg) : 'Whole AO'} areaCustom={!!surveyArea} drawing={areaPick.on} cornerSet={!!areaPick.corner}
+            canChangeArea={!missionOn} queue={queue} selectedOptionId={pickedId}
+            onFullArea={() => chooseArea(null)} onDrawArea={() => setAreaPick({ on: true, corner: null })} onCancelDraw={() => setAreaPick({ on: false, corner: null })}
+            onPickOption={(o) => chooseArea(o.area, o.id)} />
         )}
 
         {mode === 'route' && (
@@ -705,6 +777,10 @@ export default function OpsMap(p: Props) {
           <span>{m.low}</span>
           {legendSwatches(m.palette).map((c, i) => <i key={i} style={{ background: c }} />)}
           <span>{m.high}</span>
+        </div>
+        {fusionNote && <span className="ops-fused">{fusionNote}</span>}
+        <div className="ops-nato" aria-label="Symbol key">
+          {NATO_KEY.map((a) => <span key={a}><i dangerouslySetInnerHTML={{ __html: natoSvg(a, 16) }} />{AFFIL[a].label}</span>)}
         </div>
       </div>
 
