@@ -36,7 +36,7 @@ def run(raw, launch_teams_by_t):
     X, Y = cell_centers()
     grids = {}
 
-    for t in range(raw["duration_s"]):
+    for t in range(raw["duration_s"] + 1):
         teams = launch_teams_by_t.get(t, [])
         if not teams:
             grids[t] = empty_grid()

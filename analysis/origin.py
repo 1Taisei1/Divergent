@@ -2,8 +2,11 @@
 
 run(raw, tracks_by_t) -> (origins_by_t, heatmap_by_t)  (see CONTRACT.md)
 
-Back-projection: fit a velocity to a track's earliest points and step back from its first point by speed x 10 s
-(drones fly low and unseen for roughly their first 10 s). The estimate settles once 5 points exist.
+Back-projection: fit a velocity to a track's earliest points and step back from its first point by speed x BACK_S.
+BACK_S is 0 because sim/generate.py detects drones from the moment they launch (measured on `demo`: mean origin error
+43 m at 0 s vs 443 m at 10 s). Raise it if the sim adds an unseen climb-out after launch. The heat map still smears
+SMEAR_BACK_S of flight behind the first point: the launch could be further back along the heading if detection was late.
+The estimate settles once 5 points exist.
 """
 
 import math
@@ -14,7 +17,8 @@ from analysis.grid import cell_centers, gaussian, to_grid
 
 MIN_POINTS = 3
 FIT_POINTS = 5
-BACK_S = 10.0
+BACK_S = 0.0
+SMEAR_BACK_S = 10.0
 SMEAR_SIGMA_M = 100.0
 SMEAR_WEIGHT = 0.3
 
@@ -39,8 +43,9 @@ def _estimate(track, majors_by_t):
         "confidence": round(confidence, 2),
         "radius_m": round(radius, 1),
     }
-    # back-projection segment: from the first point to twice the projected distance behind it
-    segment = ((first["x"], first["y"]), (first["x"] - 2 * vx * BACK_S, first["y"] - 2 * vy * BACK_S))
+    # back-projection segment: from the peak to SMEAR_BACK_S of flight further behind it
+    px, py = first["x"] - vx * BACK_S, first["y"] - vy * BACK_S
+    segment = ((px, py), (px - vx * SMEAR_BACK_S, py - vy * SMEAR_BACK_S))
     return estimate, segment
 
 
@@ -58,7 +63,7 @@ def run(raw, tracks_by_t):
     origins_by_t = {}
     heatmap_by_t = {}
 
-    for t in range(raw["duration_s"]):
+    for t in range(raw["duration_s"] + 1):
         origins = []
         heat = np.zeros_like(X)
         for track in tracks_by_t.get(t, []):
